@@ -539,6 +539,10 @@ background:radial-gradient(60% 140% at 100% 120%,rgba(247,184,133,.95),transpare
 .tl li.on{color:var(--ink)}.tl li.on i{border-color:var(--g2);background:var(--g2)}
 .tl em{font-style:normal;margin-left:auto;font-size:12.5px;font-weight:800;color:var(--gd);background:var(--led);padding:3px 11px;border-radius:99px}
 .warnchip{display:inline-block;margin-top:12px;padding:5px 12px;border-radius:99px;background:#FFE8D2;color:#A5571B;font-weight:800;font-size:13px}
+.codewarn{display:flex;gap:12px;align-items:flex-start;margin:0 0 16px;padding:14px 16px;border-radius:18px;background:#FFF1E0;border:2px solid #F0A55C;color:#7A3F0E;line-height:1.6;font-size:14.5px}
+.codewarn .cw-ic{flex:none;width:26px;height:26px;margin-top:1px;border-radius:50%;background:#E8741C;color:#fff;display:grid;place-items:center;font-size:16px;font-weight:900;font-style:normal}
+.codewarn strong{display:block;font-size:15.5px;margin-bottom:2px;color:#6A3208}
+.cancelask{margin:8px 0 10px;padding:12px 14px;border-radius:14px;background:#FFE8EC;color:#9A3A52;font-weight:700;font-size:14.5px;line-height:1.6}
 .notes{margin:20px 4px 0;padding:0;list-style:none;display:grid;gap:8px;color:var(--mut);font-size:14px;line-height:1.6}
 .notes li{display:flex;gap:10px}.notes li:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--sun);margin-top:9px;flex:none}
 .ol{display:grid;gap:10px;margin:0}.ol div{display:flex;justify-content:space-between;gap:14px;font-weight:700}.ol small{display:block;color:var(--mut);font-weight:500}
@@ -719,6 +723,61 @@ def pass_card(label, title, sub, body, ok=False, note=""):
     md(f'<div class="pass{" ok" if ok else ""}"><div class="pass-top"><div class="pass-lab">{mark}{label}</div>'
        f'<div class="pass-title">{title}</div><div class="pass-sub">{sub}</div></div><div class="pass-cut"></div>'
        f'<div class="pass-body">{body}{note_html}</div></div>')
+
+
+def code_warning(kind: str) -> str:
+    """번호를 잊지 않도록 알려 주는 경고 상자"""
+    if kind == "bus":
+        t, d = "예약번호를 꼭 기억하세요!", "예약번호가 없으면 셔틀을 탈 수 없어요. 지금 화면을 캡처하거나, 아래 복사 버튼으로 번호를 저장해 두세요."
+    else:
+        t, d = "주문번호를 꼭 기억하세요!", "주문번호가 없으면 음료를 받을 수 없어요. 지금 화면을 캡처하거나, 아래 복사 버튼으로 번호를 저장해 두세요."
+    return f'<div class="codewarn" role="alert"><b class="cw-ic">!</b><div><strong>{t}</strong>{d}</div></div>'
+
+
+def bus_cancelable(day: str, time_: str) -> bool:
+    """출발 시간이 아직 안 지났을 때만 취소할 수 있어요"""
+    try:
+        return datetime.fromisoformat(f"{day} {time_}").replace(tzinfo=KST) > now_kst()
+    except Exception:
+        return True
+
+
+def ask_cancel(flag: str, code: str):
+    st.session_state[flag] = code
+
+
+def stop_cancel(flag: str):
+    st.session_state.pop(flag, None)
+
+
+def do_cancel(table: str, code: str, flag: str, ticket_key, msg_key):
+    try:
+        db_update(table, code, status="취소")
+    except Exception as e:
+        st.session_state["_tk_err"] = explain(e)
+        st.session_state.pop(flag, None)
+    else:
+        st.session_state.pop(flag, None)
+        if ticket_key:
+            st.session_state.pop(ticket_key, None)
+        if msg_key:
+            st.session_state[msg_key] = code
+        st.toast("취소했어요", icon="✅")
+
+
+def cancel_box(table: str, code: str, label: str, pfx: str, ticket_key=None, msg_key=None):
+    """취소 버튼 → '정말 취소할까요?' 확인 → 취소 (실수로 누르는 걸 막아 줘요)"""
+    flag = f"{pfx}_confirm"
+    err = st.session_state.pop("_tk_err", None)
+    if err:
+        st.error(f"취소에 실패했어요. {err}")
+    if st.session_state.get(flag) == code:
+        md('<div class="cancelask">정말 취소할까요? 취소하면 되돌릴 수 없어요.</div>')
+        a, b = st.columns(2)
+        a.button("네, 취소할게요", key=f"{pfx}_yes", type="primary", on_click=do_cancel, args=(table, code, flag, ticket_key, msg_key))
+        b.button("아니요", key=f"{pfx}_no", on_click=stop_cancel, args=(flag,))
+    else:
+        st.button(label, key=f"{pfx}_ask", on_click=ask_cancel, args=(flag, code))
 
 
 def timeline(stops, board, alight) -> str:
@@ -941,11 +1000,18 @@ def page_bus():
                         st.rerun()
     with right:
         t = ss.get("ticket")
+        gone = ss.pop("b_cancelled", None)
+        if gone and not t:
+            st.success(f"예약({gone})을 취소했어요. 그 좌석은 다른 분이 다시 예약할 수 있어요.")
         if t:
+            md(code_warning("bus"))
             pass_card("예약이 완료됐어요", t["code"], esc(f"{t['campus']} · {t['kind']} · {t['route']}"),
                       timeline(t["stops"], t["board"], t["alight"])
                       + f'<dl><dt>탑승</dt><dd>{esc(t["when"])}</dd><dt>좌석</dt><dd>{esc(t["seat"])}</dd><dt>이름</dt><dd>{esc(t["name"])}</dd></dl>',
-                      ok=True, note="탑승할 때 학생증과 예약번호를 보여 주세요. 예약번호는 음료 주문·예약 조회 화면에서도 쓸 수 있어요.")
+                      ok=True, note="탑승할 때 학생증과 예약번호를 보여 주세요. 예약번호는 음료 주문·예약 조회 화면에서도 쓸 수 있어요. 취소는 아래 버튼이나 ‘예약 조회’ 탭에서 할 수 있어요.")
+            st.code(t["code"], language=None)
+            if bus_cancelable(t["day"], t["time"]):
+                cancel_box("reservations", t["code"], "이 예약 취소하기", "bk", "ticket", "b_cancelled")
             st.button("다른 좌석 예약하기", key="b_new", on_click=clear_key, args=("ticket",))
         else:
             warn = ""
@@ -957,7 +1023,7 @@ def page_bus():
                         f'<dt>이름</dt><dd>{esc(name.strip()) or "입력 전"}</dd></dl>{warn}')
             md("""<ul class="notes"><li>탑승일은 오늘부터 30일 뒤까지 고를 수 있어요.</li>
             <li>같은 시간·노선에서 이미 예약된 좌석은 회색으로 표시돼요.</li>
-            <li>탑승할 때 학생증과 예약번호를 보여 주세요.</li><li>출발 10분 전까지 정류장에 도착해 주세요.</li></ul>""")
+            <li>탑승할 때 학생증과 예약번호를 보여 주세요. 예약번호가 없으면 탈 수 없으니 꼭 저장해 두세요.</li><li>출발 10분 전까지 정류장에 도착해 주세요.</li></ul>""")
 
 
 # ───────────────────────── 음료 주문 ─────────────────────────
@@ -1010,12 +1076,18 @@ def page_drink():
     with right:
         with st.container(key="cartbox"):
             order = st.session_state.get("d_ticket")
+            gone = st.session_state.pop("d_cancelled", None)
+            if gone and not order:
+                st.success(f"주문({gone})을 취소했어요.")
             if order:
+                md(code_warning("drink"))
                 rows = "".join(f'<div><span>{esc(n)}</span><span>{esc(q)}</span></div>' for n, q in order["lines"])
                 pass_card("주문이 접수됐어요", order["code"], esc(f"{order['how']} · {order['when']}"),
                           f'<div class="ol">{rows}</div><div class="tot"><span>합계</span><b>{won(order["total"])}</b></div>'
                           f'<dl><dt>이름</dt><dd>{esc(order["name"])}</dd></dl>',
-                          ok=True, note="1층 카운터에서 주문번호를 말씀해 주세요. 결제는 수령할 때 카운터에서 해요.")
+                          ok=True, note="1층 카운터에서 주문번호를 말씀해 주세요. 결제는 수령할 때 카운터에서 해요. 취소는 아래 버튼이나 ‘예약 조회’ 탭에서 할 수 있어요.")
+                st.code(order["code"], language=None)
+                cancel_box("orders", order["code"], "이 주문 취소하기", "dk", "d_ticket", "d_cancelled")
                 st.button("새로 주문하기", key="d_new", on_click=clear_key, args=("d_ticket",))
             else:
                 n_items = sum(c["q"] for c in cart)
@@ -1063,14 +1135,6 @@ def page_drink():
 
 
 # ───────────────────────── 예약 조회 · 취소 / 관리자 ─────────────────────────
-def cancel_row(table: str, code: str):
-    try:
-        db_update(table, code, status="취소")
-        st.toast("취소했어요", icon="✅")
-    except Exception as e:
-        st.session_state["_cancel_err"] = str(e)
-
-
 def show_lookup(code: str, name: str):
     table = "orders" if code.startswith("DR-") else "reservations"
     try:
@@ -1083,8 +1147,6 @@ def show_lookup(code: str, name: str):
         st.error("일치하는 내역을 찾을 수 없어요. 번호와 이름을 다시 확인해 주세요.")
         return
     done = row["status"] == "취소"
-    if st.session_state.pop("_cancel_err", None):
-        st.error("취소에 실패했어요. 잠시 후 다시 시도해 주세요.")
     if table == "reservations":
         pass_card(f"버스 예약 · {row['status']}", row["code"], esc(f"{row['campus']} · {row['kind']} · {row['route']}"),
                   f'<dl><dt>탑승</dt><dd>{esc(row["ride_date"])} {esc(row["depart_time"])}</dd>'
@@ -1093,7 +1155,7 @@ def show_lookup(code: str, name: str):
         if not done:
             when = datetime.fromisoformat(f'{row["ride_date"]} {row["depart_time"]}').replace(tzinfo=KST)
             if when > now_kst():
-                st.button("예약 취소하기", key="l_cancel", on_click=cancel_row, args=("reservations", row["code"]))
+                cancel_box("reservations", row["code"], "예약 취소하기", "lc")
             else:
                 st.caption("이미 지난 예약은 취소할 수 없어요.")
     else:
@@ -1101,7 +1163,7 @@ def show_lookup(code: str, name: str):
                   f'<div class="ol"><div><span>{esc(row["items"])}</span></div></div>'
                   f'<div class="tot"><span>합계</span><b>{won(int(row["total"] or 0))}</b></div>', ok=not done)
         if not done:
-            st.button("주문 취소하기", key="l_cancel_o", on_click=cancel_row, args=("orders", row["code"]))
+            cancel_box("orders", row["code"], "주문 취소하기", "lc")
 
 
 def show_df(df):
@@ -1180,6 +1242,7 @@ def page_lookup():
         with st.container(key="lookup"):
             code = st.text_input("예약번호 · 주문번호", placeholder="KYU-261117-AB12", key="l_code")
             name = st.text_input("이름", placeholder="홍길동", max_chars=20, key="l_name")
+            st.caption("번호를 잊어버리면 조회도 취소도 할 수 없어요. 예약번호·주문번호는 꼭 저장해 두세요.")
             if st.button("조회하기", type="primary", key="l_go"):
                 st.session_state["lk"] = (code.strip().upper(), name.strip())
             q = st.session_state.get("lk")
