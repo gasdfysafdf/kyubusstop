@@ -27,14 +27,14 @@ ASSETS = BASE / "assets"
 # ═════════════ 여기만 고치면 내용이 바뀝니다 (아래 값은 모두 예시예요) ═════════════
 STOP_NAME = "뀨 스탑 (건양대학교 메디컬캠퍼스)"                         # 메디컬캠퍼스(대전) 정류장 이름
 STOP_ADDRESS = "대전 서구 관저동로 158 건양대학교 메디컬캠퍼스 내"   # ← 예시: 실제 주소로 수정 (메디컬캠퍼스)
-STOP_LAT, STOP_LON = 36.3040, 127.3400                        # ← 예시: 메디컬캠퍼스 정류장 좌표로 수정
+STOP_LAT, STOP_LON = 36.30389, 127.34352                      # 메디컬캠퍼스 뀨 스탑 자리 (구글 지도 Plus Code 8Q89883V+HC2 에서 계산)
 OPEN_HOURS = "평일 07:00 – 20:00"                              # ← 예시: 실제 운영 시간으로 수정
 
 # 캠퍼스 2곳 (글로벌=논산, 메디컬=대전). 아래 글로벌캠퍼스 주소·좌표는 예시예요 → 실제 값으로 수정
 CAMPUSES = {
     "글로벌캠퍼스": dict(city="논산", name="뀨 스탑 (건양대학교 글로벌캠퍼스)",
                      address="충남 논산시 대학로 121 건양대학교 글로벌캠퍼스 내",   # ← 예시
-                     lat=36.2972, lon=127.0990, hours=OPEN_HOURS),                # ← 예시 좌표
+                     lat=36.18119, lon=127.10870, hours=OPEN_HOURS),               # 글로벌캠퍼스 뀨 스탑 자리 (Plus Code 8Q8954J5+FFG 에서 계산)
     "메디컬캠퍼스": dict(city="대전", name=STOP_NAME, address=STOP_ADDRESS,
                      lat=STOP_LAT, lon=STOP_LON, hours=OPEN_HOURS),
 }
@@ -1015,7 +1015,7 @@ def page_drink():
                 pass_card("주문이 접수됐어요", order["code"], esc(f"{order['how']} · {order['when']}"),
                           f'<div class="ol">{rows}</div><div class="tot"><span>합계</span><b>{won(order["total"])}</b></div>'
                           f'<dl><dt>이름</dt><dd>{esc(order["name"])}</dd></dl>',
-                          ok=True, note="1층 카운터에서 주문번호를 말씀해 주세요. 결제는 수령할 때 카운터에서 해요. (예시 문구)")
+                          ok=True, note="1층 카운터에서 주문번호를 말씀해 주세요. 결제는 수령할 때 카운터에서 해요.")
                 st.button("새로 주문하기", key="d_new", on_click=clear_key, args=("d_ticket",))
             else:
                 n_items = sum(c["q"] for c in cart)
