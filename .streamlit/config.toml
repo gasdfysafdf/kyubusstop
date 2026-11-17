@@ -1,9 +1,9 @@
 [theme]
 base = "light"
-primaryColor = "#1f5a41"
-backgroundColor = "#fbf5ea"
-secondaryBackgroundColor = "#efe7d6"
-textColor = "#1d2b24"
+primaryColor = "#0E4A38"
+backgroundColor = "#FFF8EE"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#13241D"
 
-[server]
-enableXsrfProtection = true
+[browser]
+gatherUsageStats = false
