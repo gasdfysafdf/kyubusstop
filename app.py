@@ -3,14 +3,17 @@
 """
 import base64
 import csv
+import hmac
 import io
 import random
 import string
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from html import escape as esc
 from pathlib import Path
 from urllib.parse import quote
 
+import pandas as pd
+import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -21,19 +24,30 @@ BASE = Path(__file__).parent
 ASSETS = BASE / "assets"
 
 # ═════════════ 여기만 고치면 내용이 바뀝니다 (아래 값은 모두 예시예요) ═════════════
-STOP_NAME = "뀨 스탑 (건양대학교 대전캠퍼스)"
-STOP_ADDRESS = "대전 서구 관저동로 158 건양대학교 대전캠퍼스 내"   # ← 예시: 실제 주소로 수정
-STOP_LAT, STOP_LON = 36.3040, 127.3400                        # ← 예시: 실제 설치 위치 좌표로 수정
+STOP_NAME = "뀨 스탑 (건양대학교 메디컬캠퍼스)"                         # 메디컬캠퍼스(대전) 정류장 이름
+STOP_ADDRESS = "대전 서구 관저동로 158 건양대학교 메디컬캠퍼스 내"   # ← 예시: 실제 주소로 수정 (메디컬캠퍼스)
+STOP_LAT, STOP_LON = 36.3040, 127.3400                        # ← 예시: 메디컬캠퍼스 정류장 좌표로 수정
 OPEN_HOURS = "평일 07:00 – 20:00"                              # ← 예시: 실제 운영 시간으로 수정
 
-CAMPUS = ["대전캠퍼스", "논산캠퍼스"]
+# 캠퍼스 2곳 (글로벌=논산, 메디컬=대전). 아래 글로벌캠퍼스 주소·좌표는 예시예요 → 실제 값으로 수정
+CAMPUSES = {
+    "글로벌캠퍼스": dict(city="논산", name="뀨 스탑 (건양대학교 글로벌캠퍼스)",
+                     address="충남 논산시 대학로 121 건양대학교 글로벌캠퍼스 내",   # ← 예시
+                     lat=36.2972, lon=127.0990, hours=OPEN_HOURS),                # ← 예시 좌표
+    "메디컬캠퍼스": dict(city="대전", name=STOP_NAME, address=STOP_ADDRESS,
+                     lat=STOP_LAT, lon=STOP_LON, hours=OPEN_HOURS),
+}
+CAMPUS_LIST = list(CAMPUSES)
+# 특정 캠퍼스에만 가는 지역 노선은 여기에 적어요. 예: {"선사": ["글로벌캠퍼스"]}  (비워 두면 두 캠퍼스 모두)
+ROUTE_ONLY = {}
+SEAT_ROWS = 11                                                         # 좌석 줄 수 (한 줄 4석 → 44석)
 # (노선 이름, 구분) — 호차 번호는 화면에 표시하지 않아요
 REGIONAL = [("선사", "주중"), ("삼천중학교", "주중"), ("대전복합터미널", "주중"), ("송강", "주중"),
             ("신탄진", "주중"), ("북세종", "주중"), ("남세종·공주", "주중"), ("아산·천안", "주중"),
             ("청주·오송", "주중"), ("서울 노선", "주말"), ("인천·경기 노선", "주말"),
             ("태안·서산·당진", "주말"), ("예산·홍성·광천·보령", "주말"), ("대전복합터미널", "주말"),
             ("논산·대전", "방학")]
-LOOP_STOPS = ["대전캠퍼스", "대전복합터미널", "대전역 동광장"]          # ← 예시: 실제 정류장으로 수정
+LOOPS = {"메디컬캠퍼스": ["건양대 메디컬캠퍼스", "대전복합터미널", "대전역 동광장"]}   # ← 예시: 캠퍼스별 순환 노선 정류장
 TIMES = {"등교": ["07:30", "08:30"], "하교": ["17:30", "19:00"],       # ← 예시: 실제 출발 시간으로 수정
          "순환": ["09:00", "12:00", "15:00"]}
 DAYS = {"주중": {0, 1, 2, 3, 4}, "주말": {4, 5, 6}}                   # 그 외(방학·셔틀)는 요일 제한 없음
@@ -72,23 +86,36 @@ PICKUP_WHEN = ["지금", "10분 후", "20분 후", "30분 후"]
 # ═════════════════════════════════════════════════════════════════════════════════
 
 WEEKDAY_KO = "월화수목금토일"
-PAGES = ["홈", "버스 예약", "음료 주문"]
-QUERY_TO_PAGE = {"bus": "버스 예약", "drink": "음료 주문", "home": "홈"}
+PAGES = ["홈", "버스 예약", "음료 주문", "예약 조회"]
+QUERY_TO_PAGE = {"bus": "버스 예약", "drink": "음료 주문", "lookup": "예약 조회", "home": "홈"}
 PAGE_TO_QUERY = {v: k for k, v in QUERY_TO_PAGE.items()}
 
 
-def build_routes():
-    r = {"등교": {}, "하교": {}, "순환": {}}   # 구분 → {노선 표시이름: (분류, 정류장 순서)}
+def routes_for(campus: str):
+    """선택한 캠퍼스에서 이용할 수 있는 노선: 구분 → {노선 표시이름: (분류, 정류장 순서)}"""
+    r = {"등교": {}, "하교": {}, "순환": {}}
+    me = f"건양대 {campus}"
     for n, k in REGIONAL:
-        r["등교"][f"{k} · {n} → 건양대학교"] = (k, [n] + CAMPUS)
-        r["하교"][f"{k} · 건양대학교 → {n}"] = (k, CAMPUS[::-1] + [n])
-    r["순환"]["셔틀 · 논산 → 대전"] = ("셔틀", CAMPUS[::-1])
-    r["순환"]["셔틀 · 대전 → 논산"] = ("셔틀", CAMPUS)
-    r["순환"]["주중 · 대전 순환"] = ("주중", LOOP_STOPS)
+        if campus not in ROUTE_ONLY.get(n, CAMPUS_LIST):
+            continue
+        r["등교"][f"{k} · {n} → 건양대학교"] = (k, [n, me])      # 등교: 이 캠퍼스로 오는 버스
+        r["하교"][f"{k} · 건양대학교 → {n}"] = (k, [me, n])      # 하교: 이 캠퍼스에서 출발
+    for o in CAMPUS_LIST:                                         # 셔틀: 이 캠퍼스에서 출발해 다른 캠퍼스로
+        if o != campus:
+            r["순환"][f"셔틀 · {CAMPUSES[campus]['city']} → {CAMPUSES[o]['city']}"] = ("셔틀", [me, f"건양대 {o}"])
+    if campus in LOOPS:
+        r["순환"][f"주중 · {CAMPUSES[campus]['city']} 순환"] = ("주중", LOOPS[campus])
     return r
 
 
-ROUTES = build_routes()
+SEATS = [f"{i}{c}" for i in range(1, SEAT_ROWS + 1) for c in "ABCD"]
+KST = timezone(timedelta(hours=9))
+
+
+def now_kst():
+    return datetime.now(KST)        # 배포 서버는 UTC라서 한국 시간으로 맞춰 써요
+
+
 ALL = {m["name"]: dict(m, cat=c) for c, ms in MENU.items() for m in ms}
 ORDER = list(ALL)
 
@@ -133,17 +160,100 @@ def rand4() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
 
-def save_csv(fname, header, row):
-    f = BASE / fname
+FIELDS = {
+    "reservations": ["code", "created_at", "campus", "kind", "route", "ride_date", "depart_time", "name",
+                     "board_stop", "alight_stop", "seat", "status"],
+    "orders": ["code", "created_at", "name", "items", "total", "pickup_how", "pickup_when", "bus_code", "status"],
+}
+
+
+def _sb():
     try:
-        new = not f.exists()
-        with f.open("a", newline="", encoding="utf-8-sig") as fh:
-            w = csv.writer(fh)
-            if new:
-                w.writerow(header)
-            w.writerow(row)
+        c = st.secrets["supabase"]
+        return str(c["url"]).rstrip("/"), str(c["key"])
+    except Exception:
+        return None
+
+
+def _hdr(key, extra=None):
+    return {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json", **(extra or {})}
+
+
+def _lread(t):
+    f = BASE / "data" / f"{t}.csv"
+    if not f.exists():
+        return []
+    with f.open(encoding="utf-8-sig", newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+def _lwrite(t, rows):
+    try:
+        (BASE / "data").mkdir(exist_ok=True)
+        with (BASE / "data" / f"{t}.csv").open("w", newline="", encoding="utf-8-sig") as fh:
+            w = csv.DictWriter(fh, fieldnames=FIELDS[t])
+            w.writeheader()
+            w.writerows(rows)
     except OSError:
         pass  # 배포 환경에서 쓰기가 막혀도 화면 동작은 유지
+
+
+def db_insert(t, row):
+    cfg = _sb()
+    if cfg:
+        r = requests.post(f"{cfg[0]}/rest/v1/{t}", headers=_hdr(cfg[1], {"Prefer": "return=minimal"}), json=row, timeout=15)
+        r.raise_for_status()
+    else:
+        _lwrite(t, _lread(t) + [{k: row.get(k, "") for k in FIELDS[t]}])
+
+
+def db_select(t, **eq):
+    cfg = _sb()
+    if cfg:
+        params = {"select": "*", "order": "created_at.desc", **{k: f"eq.{v}" for k, v in eq.items()}}
+        r = requests.get(f"{cfg[0]}/rest/v1/{t}", headers=_hdr(cfg[1]), params=params, timeout=15)
+        r.raise_for_status()
+        return r.json()
+    rows = [x for x in _lread(t) if all(str(x.get(k)) == str(v) for k, v in eq.items())]
+    return sorted(rows, key=lambda x: x.get("created_at", ""), reverse=True)
+
+
+def db_update(t, code, **vals):
+    cfg = _sb()
+    if cfg:
+        r = requests.patch(f"{cfg[0]}/rest/v1/{t}", headers=_hdr(cfg[1]), params={"code": f"eq.{code}"}, json=vals, timeout=15)
+        r.raise_for_status()
+    else:
+        rows = _lread(t)
+        for x in rows:
+            if x["code"] == code:
+                x.update(vals)
+        _lwrite(t, rows)
+
+
+def taken_seats(campus, kind, route, day, time_):
+    try:
+        rows = db_select("reservations", campus=campus, kind=kind, route=route, ride_date=day, depart_time=time_, status="예약")
+        return {r["seat"] for r in rows}
+    except Exception as e:
+        st.warning(f"좌석 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요. ({e})")
+        return set()
+
+
+def seat_map(taken, selected) -> str:
+    rows = []
+    for i in range(1, SEAT_ROWS + 1):
+        cells = []
+        for j, c in enumerate("ABCD"):
+            sid = f"{i}{c}"
+            cls = "taken" if sid in taken else ("sel" if sid == selected else "free")
+            cells.append(f'<div class="seat {cls}">{sid}</div>')
+            if j == 1:
+                cells.append('<div class="aisle"></div>')
+        rows.append(f'<div class="srow">{"".join(cells)}</div>')
+    left = len(SEATS) - len(taken)
+    return (f'<div class="bus"><div class="bus-head">▲ 앞(운전석) · 남은 좌석 {left}/{len(SEATS)}</div>{"".join(rows)}'
+            '<div class="legend"><span class="lg free"></span>선택 가능<span class="lg sel"></span>내 좌석<span class="lg taken"></span>예약됨</div></div>')
 
 
 ICONS = {
@@ -167,7 +277,7 @@ CSS = r"""
 --ext:__EXT__}
 html{scroll-behavior:smooth}
 #MainMenu,[data-testid="stHeader"],[data-testid="stToolbar"],[data-testid="stDecoration"],[data-testid="stStatusWidget"],[data-testid="stHeaderActionElements"],footer{display:none!important}
-.stApp{background:var(--bg);overflow-x:hidden;color:var(--ink)}
+.stApp{background:radial-gradient(900px 520px at 100% 780px,rgba(247,184,133,.22),transparent 70%),radial-gradient(800px 520px at 0% 1700px,rgba(156,203,234,.25),transparent 70%),radial-gradient(800px 520px at 100% 2600px,rgba(243,166,184,.2),transparent 70%),var(--bg);overflow-x:hidden;color:var(--ink)}
 .stApp,.stApp :is(p,div,span,label,input,button,li,a,small,b,dt,dd,textarea,h1,h2,h3,h4,em):not([data-testid="stIconMaterial"]):not(.material-icons){font-family:'Pretendard','Apple SD Gothic Neo','Malgun Gothic',sans-serif}
 .stApp [data-testid="stMarkdownContainer"] :is(h1,h2,h3,h4){padding:0;margin:0;line-height:1.25;font-weight:800;letter-spacing:-.025em;color:var(--ink)}
 .stApp [data-testid="stMarkdownContainer"] p{margin:0}
@@ -187,7 +297,7 @@ background:rgba(255,255,255,.88);backdrop-filter:saturate(1.5) blur(16px);-webki
 .stApp .brand b{display:block;font-family:'Jua','Pretendard'!important;font-size:20px;line-height:1.1;font-weight:400}
 .brand small{display:block;color:var(--mut);font-weight:700;font-size:11px;letter-spacing:.12em}
 .st-key-topnav [role="radiogroup"]{gap:4px!important;flex-wrap:nowrap!important;background:var(--mint);padding:4px;border-radius:99px}
-.st-key-topnav label[data-baseweb="radio"]{border:0!important;background:transparent!important;padding:9px 22px!important;border-radius:99px!important}
+.st-key-topnav label[data-baseweb="radio"]{border:0!important;background:transparent!important;padding:9px 18px!important;border-radius:99px!important}
 .st-key-topnav label[data-baseweb="radio"]:has(input:checked){background:var(--g)!important;box-shadow:0 6px 14px -8px rgba(14,74,56,.8)}
 .st-key-topnav label[data-baseweb="radio"] p{font-size:15px;white-space:nowrap}
 
@@ -216,7 +326,7 @@ radial-gradient(40% 100% at 100% -10%,rgba(156,203,234,.45),transparent 60%),lin
 svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none}
 
 /* ── 홈: 히어로 ── */
-.st-key-hero{width:100vw;margin-left:calc(50% - 50vw);box-sizing:border-box;min-height:82vh;padding:150px var(--pad) 118px!important;display:flex!important;flex-direction:column;justify-content:center;gap:0!important;
+.st-key-hero{position:relative;width:100vw;margin-left:calc(50% - 50vw);box-sizing:border-box;min-height:82vh;padding:150px var(--pad) 118px!important;display:flex!important;flex-direction:column;justify-content:center;gap:0!important;
 background:linear-gradient(95deg,rgba(5,30,22,.93) 0%,rgba(5,30,22,.6) 46%,rgba(5,30,22,.08) 100%),linear-gradient(0deg,rgba(243,166,184,.32),rgba(247,184,133,0) 45%),var(--ext) center/cover}
 .badge{display:inline-block;padding:9px 18px;border-radius:99px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.1);color:#fff;font-weight:700;font-size:14px;backdrop-filter:blur(6px)}
 .stApp .hero-copy h1{font-family:'Jua','Pretendard'!important;font-weight:400;color:#fff;font-size:clamp(46px,7.4vw,92px);line-height:1.12;margin:26px 0 22px;letter-spacing:-.01em;animation:rise .8s cubic-bezier(.2,.7,.2,1) both}
@@ -246,7 +356,7 @@ background:linear-gradient(95deg,rgba(5,30,22,.93) 0%,rgba(5,30,22,.6) 46%,rgba(
 .feat b{display:block}.feat span{color:var(--mut);font-size:15px}
 .floors{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:36px}
 .floor{background:#fff;border:1px solid var(--line);border-radius:28px;overflow:hidden;box-shadow:var(--sh)}
-.floor .pic{position:relative;background:linear-gradient(135deg,#DCEBE2,#F6E3E6)}.floor img,.floor .ph{width:100%;display:block;aspect-ratio:4/3;object-fit:cover}
+.floor .pic{position:relative;background:linear-gradient(135deg,#DCEBE2,#F6E3E6)}.floor img,.floor .ph{width:100%;display:block;aspect-ratio:4/3;object-fit:contain;background:#FBF8F1}
 .floor .lv{position:absolute;left:16px;top:16px;background:var(--g);color:#fff;font-weight:800;font-size:14px;padding:6px 13px;border-radius:99px}
 .floor .tx{padding:24px 26px 28px}.stApp .floor h3{font-size:22px;margin:0 0 8px}.floor p{color:var(--mut);line-height:1.75;font-size:15.5px}
 .rgroup{margin:44px 0 14px;display:flex;align-items:baseline;gap:12px}.stApp .rgroup h3{font-size:24px}.rgroup span{color:var(--mut);font-size:14px}
@@ -288,12 +398,14 @@ radial-gradient(45% 100% at 100% -20%,rgba(156,203,234,.7),transparent 60%),line
 .stButton>button:is([kind="primary"],[data-testid="stBaseButton-primary"]):hover{background:var(--g2);color:#fff}
 .stButton>button:is([kind="secondary"],[data-testid="stBaseButton-secondary"]){background:#fff;color:var(--g);border:1.5px solid var(--line)}
 .stButton>button:is([kind="secondary"],[data-testid="stBaseButton-secondary"]):hover{border-color:var(--g2);color:var(--g2);background:#fff}
-.stButton>button p{font-weight:800}
+.stButton>button p{font-weight:800;color:inherit!important}
 .st-key-hb_bus button{background:#fff!important;color:var(--g)!important;border:0!important;min-height:56px;box-shadow:none!important}.st-key-hb_bus button:hover{background:var(--sun)!important}
 .st-key-hb_drink button,.st-key-cb_drink button{background:rgba(255,255,255,.12)!important;color:#fff!important;border:1px solid rgba(255,255,255,.55)!important;min-height:56px;backdrop-filter:blur(6px)}
 .st-key-hb_drink button:hover,.st-key-cb_drink button:hover{background:rgba(255,255,255,.24)!important}
 .st-key-cb_bus button{background:#fff!important;color:var(--g)!important;border:0!important;min-height:56px;box-shadow:none!important}.st-key-cb_bus button:hover{background:var(--sun)!important}
 .st-key-hb_bus p,.st-key-hb_drink p,.st-key-cb_bus p,.st-key-cb_drink p{font-size:16px}
+.st-key-hb_bus button p,.st-key-cb_bus button p{color:var(--g)!important}
+.st-key-hb_drink button p,.st-key-cb_drink button p{color:#fff!important}
 
 /* ── 승차권 / 영수증 카드 ── */
 .pass{background:#fff;border:1px solid var(--line);border-radius:28px;box-shadow:var(--sh);overflow:hidden;position:relative}
@@ -346,14 +458,46 @@ radial-gradient(45% 100% at 100% -20%,rgba(156,203,234,.7),transparent 60%),line
 .ch{display:flex;align-items:center;gap:10px}.ch .ico{width:44px;height:44px;border-radius:14px;background:var(--mint);color:var(--g);display:grid;place-items:center}
 .stApp .ch h3{font-size:21px}.ch .n{margin-left:auto;background:var(--g);color:#fff;font-weight:800;font-size:13px;border-radius:99px;padding:4px 11px}
 
+/* ── 뀨 스탑 분위기 장식 (초록 버스 하트 띠 · 노을 · 전구) ── */
+:root{--hearts:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='44' height='30'%3E%3Cpath d='M22 21c-6-4.2-9.5-7-9.5-10.6a4.7 4.7 0 0 1 9.5-1.4 4.7 4.7 0 0 1 9.5 1.4C31.5 14 28 16.8 22 21z' fill='white' fill-opacity='.92'/%3E%3C/svg%3E")}
+.stripe{height:30px;margin:72px 0 -36px;border-radius:99px;background:var(--hearts) repeat-x center/44px 30px,var(--g);box-shadow:0 12px 24px -16px rgba(7,38,28,.6)}
+.notice:before{content:"";display:block;height:30px;background:var(--hearts) repeat-x center/44px 30px,var(--g2)}
+.stApp .sec h2:before{content:"";display:block;width:52px;height:6px;border-radius:6px;background:var(--sunset);margin-bottom:18px}
+.st-key-hero:before{content:"";position:absolute;top:70px;left:0;right:0;height:46px;pointer-events:none;
+background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='46'%3E%3Cpath d='M0 6Q60 40 120 6' fill='none' stroke='white' stroke-opacity='.35' stroke-width='1.4'/%3E%3Cg fill='%23FFD9A0'%3E%3Ccircle cx='30' cy='19' r='7' fill-opacity='.25'/%3E%3Ccircle cx='60' cy='23' r='7' fill-opacity='.25'/%3E%3Ccircle cx='90' cy='19' r='7' fill-opacity='.25'/%3E%3Ccircle cx='30' cy='19' r='3.4'/%3E%3Ccircle cx='60' cy='23' r='3.4'/%3E%3Ccircle cx='90' cy='19' r='3.4'/%3E%3C/g%3E%3C/svg%3E") repeat-x top left}
+.moods{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:34px}
+.mood{position:relative;overflow:hidden;min-height:210px;border-radius:28px;padding:26px;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:var(--sh)}
+.mood:before{content:"";position:absolute;width:120px;height:120px;border-radius:50%;right:-24px;top:-24px;background:radial-gradient(circle,rgba(255,255,255,.85),rgba(255,255,255,0) 70%)}
+.mood.m1{background:linear-gradient(160deg,#D8ECF8,#9CCBEA)}.mood.m2{background:linear-gradient(160deg,#E4F2E8,#9CCDB2)}.mood.m3{background:linear-gradient(160deg,#F7B885,#F3A6B8 70%,#9CCBEA)}
+.mood b{position:relative;font-family:'Jua','Pretendard'!important;font-weight:400;font-size:30px;color:#07261C;margin-bottom:6px}
+.mood span{position:relative;color:#1B3A2E;font-weight:600;line-height:1.6;font-size:15px}
+.st-key-map_campus{margin-bottom:18px}
+:is(.st-key-b_campus,.st-key-map_campus) [role="radiogroup"]{display:grid!important;grid-template-columns:repeat(2,1fr)}
+.st-key-lookup{background:#fff;border:1px solid var(--line);border-radius:30px;padding:32px!important;box-shadow:var(--sh);gap:.85rem!important}
+/* 좌석표 */
+.bus{background:#fff;border:2px solid var(--g);border-radius:34px 34px 18px 18px;padding:16px 14px 16px;max-width:320px;margin:4px auto 8px;box-shadow:var(--sh)}
+.bus-head{text-align:center;font-size:13px;font-weight:700;color:var(--mut);margin-bottom:12px}
+.srow{display:flex;gap:6px;justify-content:center;margin-bottom:6px}
+.seat{width:46px;height:40px;border-radius:11px 11px 7px 7px;display:grid;place-items:center;font-size:12.5px;font-weight:800}
+.seat.free{background:#fff;border:1.5px solid var(--g2);color:var(--g)}
+.seat.taken{background:#E8EAE5;border:1.5px solid #E8EAE5;color:#A3ADA6;text-decoration:line-through}
+.seat.sel{background:var(--g);border:1.5px solid var(--g);color:#fff;box-shadow:0 8px 16px -8px rgba(14,74,56,.8)}
+.aisle{width:16px}
+.legend{margin-top:10px;font-size:12px;color:var(--mut);text-align:center;font-weight:600}
+.lg{display:inline-block;width:12px;height:12px;border-radius:4px;margin:0 5px 0 12px;vertical-align:-2px}
+.lg.free{background:#fff;border:1.5px solid var(--g2)}.lg.sel{background:var(--g)}.lg.taken{background:#E8EAE5}
+[data-testid="stButtonGroup"] button{border-radius:12px!important;border:1.5px solid var(--line)!important;background:#fff!important;color:var(--ink)!important;font-weight:800;min-height:38px}
+[data-testid="stButtonGroup"] button p{color:inherit!important}
+[data-testid="stButtonGroup"] button[data-testid$="Active"]{background:var(--g)!important;border-color:var(--g)!important;color:#fff!important}
+
 /* ── 모바일 ── */
-@media(max-width:860px){.split,.floors,.notice-in,.infobar{grid-template-columns:1fr}.split{gap:34px}.infobar>div{border-right:0;border-bottom:1px solid var(--line)}.infobar>div:last-child{border:0}
-:is(.st-key-resv,.st-key-opt,.st-key-cartbox){padding:22px 20px 24px!important}.st-key-cta{padding:36px 24px!important}.sec{padding-top:84px}}
+@media(max-width:860px){.split,.floors,.notice-in,.infobar,.moods{grid-template-columns:1fr}.mood{min-height:150px}.split{gap:34px}.infobar>div{border-right:0;border-bottom:1px solid var(--line)}.infobar>div:last-child{border:0}
+:is(.st-key-resv,.st-key-opt,.st-key-cartbox,.st-key-lookup){padding:22px 20px 24px!important}.st-key-cta{padding:36px 24px!important}.sec{padding-top:84px}}
 @media(max-width:760px){
 .st-key-topnav{height:58px;padding:0 16px!important;background:rgba(255,255,255,.97);backdrop-filter:none;-webkit-backdrop-filter:none}
 .logo{width:38px;height:38px;font-size:20px}
 .st-key-topnav [data-testid="stRadio"]{position:fixed;left:12px;right:12px;bottom:max(12px,env(safe-area-inset-bottom));z-index:1001;width:auto!important}
-.st-key-topnav [role="radiogroup"]{display:grid!important;grid-template-columns:repeat(3,1fr);background:rgba(255,255,255,.96);border:1px solid var(--line);padding:6px;
+.st-key-topnav [role="radiogroup"]{display:grid!important;grid-template-columns:repeat(4,1fr);background:rgba(255,255,255,.96);border:1px solid var(--line);padding:6px;
 box-shadow:0 18px 40px -12px rgba(7,38,28,.5);backdrop-filter:blur(14px)}
 .st-key-topnav label[data-baseweb="radio"]{padding:13px 0!important}
 .pagehead{padding-top:calc(58px + 36px);padding-bottom:40px}.pagehead p{font-size:15.5px}
@@ -460,7 +604,7 @@ def topnav():
 def footer():
     md("""<div class="notice"><div class="notice-in"><h2>탑승 전 확인해 주세요</h2>
     <div><h4>탑승 시간 준수</h4><p>출발 10분 전까지 정류장에 도착해 주세요. 정시 출발을 원칙으로 합니다.</p></div>
-    <div><h4>예약 취소 문의</h4><p>변경 및 취소는 학생복지팀으로 문의해 주세요. 무단 미탑승이 반복되면 이용이 제한될 수 있습니다.</p></div></div>
+    <div><h4>예약 취소 문의</h4><p>예약 취소는 ‘예약 조회’ 화면에서 직접 할 수 있어요. 무단 미탑승이 반복되면 이용이 제한될 수 있습니다.</p></div></div>
     <div class="foot"><span>건양대학교 뀨 스탑 버스 예약 서비스</span><span>가격·시간표·이미지는 이해를 돕기 위한 예시입니다.</span></div></div>""")
 
 
@@ -474,19 +618,22 @@ def home_hero():
         c1.button("버스 예약하기", key="hb_bus", type="primary", on_click=go, args=("버스 예약",))
         c2.button("음료 주문하기", key="hb_drink", on_click=go, args=("음료 주문",))
     md(f"""<div class="infobar">
-    <div><span class="ic">[[pin]]</span><span><small>위치</small><b>대전캠퍼스 버스 승차장 옆</b></span></div>
+    <div><span class="ic">[[pin]]</span><span><small>위치</small><b>글로벌 · 메디컬 캠퍼스 승차장 옆</b></span></div>
     <div><span class="ic">[[clock]]</span><span><small>운영 시간</small><b>{esc(OPEN_HOURS)}</b></span></div>
     <div><span class="ic">[[coffee]]</span><span><small>음료</small><b>사전 주문 가능</b></span></div></div>""")
 
 
 def home_location():
     md("""<div id="location" class="sec"><h2>뀨 스탑은 여기에 있어요</h2>
-    <p class="lead">버스 승차장 바로 옆에서 노란 불빛이 켜진 초록색 2층 건물을 찾아보세요.</p></div><div class="sp"></div>""")
+    <p class="lead">글로벌캠퍼스와 메디컬캠퍼스, 두 곳 모두 버스 승차장 바로 옆에서 노란 불빛이 켜진 초록색 2층 건물을 찾아보세요.</p></div><div class="sp"></div>""")
+    cname = st.radio("캠퍼스 위치", CAMPUS_LIST, horizontal=True, key="map_campus", label_visibility="collapsed")
+    c = CAMPUSES[cname]
+    lat, lon = c["lat"], c["lon"]
     left, right = st.columns([1.5, 1], gap="large")
     d = 0.004
-    bbox = f"{STOP_LON-d},{STOP_LAT-d*.6},{STOP_LON+d},{STOP_LAT+d*.6}"
+    bbox = f"{lon-d},{lat-d*.6},{lon+d},{lat+d*.6}"
     src = (f"https://www.openstreetmap.org/export/embed.html?bbox={quote(bbox, safe=',')}"
-           f"&layer=mapnik&marker={STOP_LAT},{STOP_LON}")
+           f"&layer=mapnik&marker={lat},{lon}")
     with left:
         with st.container(key="mapbox"):
             if hasattr(st, "iframe"):          # 최신 Streamlit
@@ -494,11 +641,11 @@ def home_location():
             else:                              # 구버전 호환
                 components.iframe(src, height=430)
     with right:
-        md(f"""<div class="info"><h3>{esc(STOP_NAME)}</h3>
-        <div class="row"><small>주소</small><span>{esc(STOP_ADDRESS)}</span></div>
-        <div class="row"><small>운영 시간</small><span>{esc(OPEN_HOURS)}</span></div>
-        <div class="row"><small>정차 노선</small><div class="chips"><span class="chip">대전 방면</span><span class="chip">논산 방면</span><span class="chip">순환</span></div></div>
-        <div class="row"><a href="https://www.openstreetmap.org/?mlat={STOP_LAT}&amp;mlon={STOP_LON}#map=18/{STOP_LAT}/{STOP_LON}" target="_blank" rel="noopener">큰 지도에서 보기</a></div></div>""")
+        md(f"""<div class="info"><h3>{esc(c["name"])}</h3>
+        <div class="row"><small>주소</small><span>{esc(c["address"])}</span></div>
+        <div class="row"><small>운영 시간</small><span>{esc(c["hours"])}</span></div>
+        <div class="row"><small>정차 노선</small><div class="chips"><span class="chip">{esc(c["city"])} 출발</span><span class="chip">셔틀</span><span class="chip">순환</span></div></div>
+        <div class="row"><a href="https://www.openstreetmap.org/?mlat={lat}&amp;mlon={lon}#map={18}/{lat}/{lon}" target="_blank" rel="noopener">큰 지도에서 보기</a></div></div>""")
 
 
 def home_service():
@@ -553,60 +700,101 @@ def home_cta():
         c2.button("음료 주문하기", key="cb_drink", on_click=go, args=("음료 주문",))
 
 
+def home_day():
+    md("""<div id="day" class="sec"><h2>하루 중 언제 와도 좋아요</h2>
+    <p class="lead">아침엔 따뜻한 한 잔, 한낮엔 통유리 라운지, 해 질 무렵엔 노을을 보며 기다려요.</p>
+    <div class="moods"><div class="mood m1"><b>아침</b><span>등굣길, 버스 오기 전에 따뜻한 음료 한 잔</span></div>
+    <div class="mood m2"><b>한낮</b><span>통유리 라운지에서 쉬어 가는 공강 시간</span></div>
+    <div class="mood m3"><b>노을</b><span>하굣길, 하늘이 물드는 걸 보며 기다리기</span></div></div></div>""")
+
+
 def page_home():
     home_hero()
     home_location()
     home_service()
+    md('<div class="stripe"></div>')
     home_inside()
+    home_day()
     home_routes()
     home_cta()
 
 
 # ───────────────────────── 버스 예약 ─────────────────────────
 def page_bus():
-    pagehead("버스 예약", "건양대 통학버스 좌석을 미리 잡아 두세요. 이름만 입력하면 돼요.")
+    pagehead("버스 예약", "캠퍼스를 고르고, 원하는 좌석까지 미리 잡아 두세요. 이름만 입력하면 돼요.")
+    ss = st.session_state
     left, right = st.columns([1.2, 1], gap="large")
     with left:
         with st.container(key="resv"):
-            md("""<div class="form-h"><span class="ico">[[ticket]]</span><div><h3>예약 정보 입력</h3><p>구분과 노선을 고르고 이름을 입력해 주세요.</p></div></div>""")
-            md('<div class="fs"><em>1</em>운행 선택</div>')
-            kind = st.radio("운행 구분", list(ROUTES), horizontal=True, key="kind", label_visibility="collapsed")
-            route = st.selectbox("노선", list(ROUTES[kind]), key=f"route_{kind}")
-            rk, stops = ROUTES[kind][route]
+            md("""<div class="form-h"><span class="ico">[[ticket]]</span><div><h3>예약 정보 입력</h3><p>캠퍼스와 노선을 고르고 좌석을 선택해 주세요.</p></div></div>""")
+            md('<div class="fs"><em>1</em>캠퍼스 · 운행 선택</div>')
+            campus = st.radio("내 캠퍼스", CAMPUS_LIST, horizontal=True, key="b_campus", label_visibility="collapsed")
+            routes = routes_for(campus)
+            kind = st.radio("운행 구분", list(routes), horizontal=True, key="kind", label_visibility="collapsed")
+            st.caption({"등교": f"{campus}로 오는 버스예요.", "하교": f"{campus}에서 출발하는 버스예요.",
+                        "순환": f"{campus}에서 출발하는 셔틀·순환 버스예요."}[kind])
+            if not routes[kind]:
+                st.info("이 캠퍼스에는 해당 구분의 노선이 아직 없어요.")
+                return
+            route = st.selectbox("노선", list(routes[kind]), key=f"route_{campus}_{kind}")
+            rk, stops = routes[kind][route]
             md('<div class="fs"><em>2</em>탑승 정보</div>')
             c1, c2 = st.columns(2)
             time_ = c1.selectbox("출발 시간", TIMES[kind], key=f"time_{kind}")
-            today = date.today()
+            today = now_kst().date()
             day = c2.date_input("탑승일", value=today, min_value=today, max_value=today + timedelta(days=30),
                                 format="YYYY-MM-DD", key="b_day")
             if rk in DAYS:
                 st.caption("주중 노선은 월~금에 운행해요." if rk == "주중" else "주말 노선은 금·토·일에 운행해요.")
             c3, c4 = st.columns(2)
-            board = c3.selectbox("승차 정류장", stops[:-1], key=f"board_{route}")
-            alight = c4.selectbox("하차 정류장", stops[stops.index(board) + 1:], key=f"alight_{route}_{board}")
-            md('<div class="fs"><em>3</em>예약자</div>')
+            board = c3.selectbox("승차 정류장", stops[:-1], key=f"board_{campus}_{route}")
+            alight = c4.selectbox("하차 정류장", stops[stops.index(board) + 1:], key=f"alight_{campus}_{route}_{board}")
+            md('<div class="fs"><em>3</em>좌석 선택</div>')
+            day_s = f"{day:%Y-%m-%d}"
+            taken = taken_seats(campus, kind, route, day_s, time_)
+            free = [x for x in SEATS if x not in taken]
+            holder = st.empty()
+            seat = None
+            if free:
+                seat = st.pills("좌석", free, selection_mode="single", label_visibility="collapsed",
+                                key=f"seat_{ss.get('nonce', 0)}_{campus}_{kind}_{route}_{day_s}_{time_}")
+            else:
+                st.error("이 시간은 만석이에요. 다른 시간을 선택해 주세요.")
+            holder.markdown(squash(seat_map(taken, seat)), unsafe_allow_html=True)
+            md('<div class="fs"><em>4</em>예약자</div>')
             name = st.text_input("이름", placeholder="홍길동", max_chars=20, key="b_name")
             if st.button("좌석 예약하기", type="primary", key="b_go"):
                 if not name.strip():
                     st.error("이름을 입력해 주세요.")
                 elif rk in DAYS and day.weekday() not in DAYS[rk]:
                     st.error(f"{route}은(는) {'월~금' if rk == '주중' else '금·토·일'}에만 운행해요. 탑승일을 바꿔 주세요.")
+                elif not seat:
+                    st.error("좌석을 선택해 주세요.")
+                elif seat in taken_seats(campus, kind, route, day_s, time_):
+                    st.error("방금 다른 분이 이 좌석을 예약했어요. 다른 좌석을 골라 주세요.")
                 else:
                     code = f"KYU-{day:%y%m%d}-{rand4()}"
-                    t = dict(code=code, kind=kind, route=route, time=time_, day=f"{day:%Y-%m-%d}",
-                             when=f"{day.month}월 {day.day}일 ({WEEKDAY_KO[day.weekday()]}) {time_}",
-                             name=name.strip(), board=board, alight=alight, stops=stops)
-                    save_csv("reservations.csv", ["예약번호", "신청시각", "구분", "노선", "출발", "탑승일", "이름", "승차", "하차"],
-                             [code, datetime.now().strftime("%Y-%m-%d %H:%M"), kind, route, time_, t["day"], t["name"], board, alight])
-                    st.session_state["ticket"] = t
-                    st.toast("예약이 완료됐어요!", icon="✅")
-    with right:                      # 왼쪽 폼이 먼저 실행되므로 방금 한 예약도 바로 보여요
-        t = st.session_state.get("ticket")
+                    row = dict(code=code, created_at=now_kst().isoformat(timespec="seconds"), campus=campus, kind=kind,
+                               route=route, ride_date=day_s, depart_time=time_, name=name.strip(),
+                               board_stop=board, alight_stop=alight, seat=seat, status="예약")
+                    try:
+                        db_insert("reservations", row)
+                    except Exception as e:
+                        st.error(f"저장에 실패했어요. 잠시 후 다시 시도해 주세요. ({e})")
+                    else:
+                        ss["ticket"] = dict(code=code, kind=kind, route=route, campus=campus, seat=seat, time=time_, day=day_s,
+                                            when=f"{day.month}월 {day.day}일 ({WEEKDAY_KO[day.weekday()]}) {time_}",
+                                            name=name.strip(), board=board, alight=alight, stops=stops)
+                        ss["nonce"] = ss.get("nonce", 0) + 1
+                        st.toast("예약이 완료됐어요!", icon="✅")
+                        st.rerun()
+    with right:
+        t = ss.get("ticket")
         if t:
-            pass_card("예약이 완료됐어요", t["code"], esc(f"{t['kind']} · {t['route']}"),
+            pass_card("예약이 완료됐어요", t["code"], esc(f"{t['campus']} · {t['kind']} · {t['route']}"),
                       timeline(t["stops"], t["board"], t["alight"])
-                      + f'<dl><dt>탑승</dt><dd>{esc(t["when"])}</dd><dt>이름</dt><dd>{esc(t["name"])}</dd></dl>',
-                      ok=True, note="탑승할 때 학생증과 예약번호를 보여 주세요. 예약번호는 음료 주문 화면에서도 쓸 수 있어요.")
+                      + f'<dl><dt>탑승</dt><dd>{esc(t["when"])}</dd><dt>좌석</dt><dd>{esc(t["seat"])}</dd><dt>이름</dt><dd>{esc(t["name"])}</dd></dl>',
+                      ok=True, note="탑승할 때 학생증과 예약번호를 보여 주세요. 예약번호는 음료 주문·예약 조회 화면에서도 쓸 수 있어요.")
             st.button("다른 좌석 예약하기", key="b_new", on_click=clear_key, args=("ticket",))
         else:
             warn = ""
@@ -614,8 +802,10 @@ def page_bus():
                 warn = '<span class="warnchip">이 날은 운행하지 않아요. 탑승일을 바꿔 주세요.</span>'
             pass_card("승차권 미리보기", esc(route), f"{day.month}월 {day.day}일 ({WEEKDAY_KO[day.weekday()]}) · {time_}",
                       timeline(stops, board, alight)
-                      + f'<dl><dt>구분</dt><dd>{esc(kind)}</dd><dt>이름</dt><dd>{esc(name.strip()) or "입력 전"}</dd></dl>{warn}')
+                      + f'<dl><dt>캠퍼스</dt><dd>{esc(campus)}</dd><dt>구분</dt><dd>{esc(kind)}</dd><dt>좌석</dt><dd>{esc(seat) if seat else "선택 전"}</dd>'
+                        f'<dt>이름</dt><dd>{esc(name.strip()) or "입력 전"}</dd></dl>{warn}')
             md("""<ul class="notes"><li>탑승일은 오늘부터 30일 뒤까지 고를 수 있어요.</li>
+            <li>같은 시간·노선에서 이미 예약된 좌석은 회색으로 표시돼요.</li>
             <li>탑승할 때 학생증과 예약번호를 보여 주세요.</li><li>출발 10분 전까지 정류장에 도착해 주세요.</li></ul>""")
 
 
@@ -703,20 +893,131 @@ def page_drink():
                         lines = [(it["n"], f'{it["t"]}{" · 샷 추가" if it["s"] else ""} · {it["q"]}잔') for it in cart]
                         items_txt = ", ".join(f"{n}({q})" for n, q in lines)
                         total = cart_total(cart)
-                        code = f"DR-{datetime.now():%H%M}-{rand4()}"
-                        save_csv("drink_orders.csv", ["주문번호", "주문시각", "이름", "메뉴", "합계", "수령방법", "수령시간", "버스예약번호"],
-                                 [code, datetime.now().strftime("%Y-%m-%d %H:%M"), name.strip(), items_txt, total, how, when, bus.strip()])
-                        st.session_state["d_ticket"] = dict(code=code, name=name.strip(), lines=lines, total=total, how=how, when=when)
-                        st.session_state["cart"] = []
-                        st.rerun()
+                        code = f"DR-{now_kst():%H%M}-{rand4()}"
+                        bus_c = bus.strip().upper()
+                        try:
+                            if bus_c and not db_select("reservations", code=bus_c):
+                                st.error("입력한 버스 예약번호를 찾을 수 없어요. 비우거나 다시 확인해 주세요.")
+                            else:
+                                db_insert("orders", dict(code=code, created_at=now_kst().isoformat(timespec="seconds"), name=name.strip(),
+                                                         items=items_txt, total=total, pickup_how=how, pickup_when=when,
+                                                         bus_code=bus_c, status="접수"))
+                                st.session_state["d_ticket"] = dict(code=code, name=name.strip(), lines=lines, total=total, how=how, when=when)
+                                st.session_state["cart"] = []
+                                st.rerun()
+                        except requests.RequestException as e:
+                            st.error(f"저장에 실패했어요. 잠시 후 다시 시도해 주세요. ({e})")
                 if cart:
                     st.button("장바구니 비우기", key="clr", on_click=clear_cart)
+
+
+# ───────────────────────── 예약 조회 · 취소 / 관리자 ─────────────────────────
+def cancel_row(table: str, code: str):
+    try:
+        db_update(table, code, status="취소")
+        st.toast("취소했어요", icon="✅")
+    except Exception as e:
+        st.session_state["_cancel_err"] = str(e)
+
+
+def show_lookup(code: str, name: str):
+    table = "orders" if code.startswith("DR-") else "reservations"
+    try:
+        rows = db_select(table, code=code)
+    except Exception as e:
+        st.error(f"조회에 실패했어요. ({e})")
+        return
+    row = rows[0] if rows and str(rows[0]["name"]).strip() == name else None
+    if not row:
+        st.error("일치하는 내역을 찾을 수 없어요. 번호와 이름을 다시 확인해 주세요.")
+        return
+    done = row["status"] == "취소"
+    if st.session_state.pop("_cancel_err", None):
+        st.error("취소에 실패했어요. 잠시 후 다시 시도해 주세요.")
+    if table == "reservations":
+        pass_card(f"버스 예약 · {row['status']}", row["code"], esc(f"{row['campus']} · {row['kind']} · {row['route']}"),
+                  f'<dl><dt>탑승</dt><dd>{esc(row["ride_date"])} {esc(row["depart_time"])}</dd>'
+                  f'<dt>구간</dt><dd>{esc(row["board_stop"])} → {esc(row["alight_stop"])}</dd>'
+                  f'<dt>좌석</dt><dd>{esc(row["seat"])}</dd><dt>이름</dt><dd>{esc(row["name"])}</dd></dl>', ok=not done)
+        if not done:
+            when = datetime.fromisoformat(f'{row["ride_date"]} {row["depart_time"]}').replace(tzinfo=KST)
+            if when > now_kst():
+                st.button("예약 취소하기", key="l_cancel", on_click=cancel_row, args=("reservations", row["code"]))
+            else:
+                st.caption("이미 지난 예약은 취소할 수 없어요.")
+    else:
+        pass_card(f"음료 주문 · {row['status']}", row["code"], esc(f"{row['pickup_how']} · {row['pickup_when']}"),
+                  f'<div class="ol"><div><span>{esc(row["items"])}</span></div></div>'
+                  f'<div class="tot"><span>합계</span><b>{won(int(row["total"] or 0))}</b></div>', ok=not done)
+        if not done:
+            st.button("주문 취소하기", key="l_cancel_o", on_click=cancel_row, args=("orders", row["code"]))
+
+
+def admin_panel():
+    with st.expander("관리자"):
+        try:
+            pw = str(st.secrets["admin"]["password"])
+        except Exception:
+            st.info("관리자 비밀번호가 아직 없어요. Secrets에 [admin] password 를 추가해 주세요.")
+            return
+        inp = st.text_input("비밀번호", type="password", key="adm_pw")
+        if not inp:
+            return
+        if not hmac.compare_digest(inp.encode(), pw.encode()):
+            st.error("비밀번호가 맞지 않아요.")
+            return
+        st.caption("저장 방식: " + ("Supabase (영구 저장)" if _sb() else "임시 CSV (앱이 재시작되면 사라져요)"))
+        try:
+            res, orders = db_select("reservations"), db_select("orders")
+        except Exception as e:
+            st.error(f"데이터를 불러오지 못했어요. ({e})")
+            return
+        active = [r for r in res if r["status"] == "예약"]
+        m = st.columns(3)
+        m[0].metric("유효 예약", len(active))
+        m[1].metric("오늘 탑승", sum(r["ride_date"] == f"{now_kst():%Y-%m-%d}" for r in active))
+        m[2].metric("접수 주문", sum(o["status"] == "접수" for o in orders))
+        a, b = st.tabs(["버스 예약", "음료 주문"])
+        with a:
+            camp = st.selectbox("캠퍼스", ["전체"] + CAMPUS_LIST, key="adm_campus")
+            df = pd.DataFrame([r for r in res if camp == "전체" or r["campus"] == camp])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            if not df.empty:
+                st.download_button("CSV 내려받기", df.to_csv(index=False).encode("utf-8-sig"), "reservations.csv", "text/csv")
+        with b:
+            df = pd.DataFrame(orders)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            if not df.empty:
+                st.download_button("CSV 내려받기", df.to_csv(index=False).encode("utf-8-sig"), "orders.csv", "text/csv", key="dl_o")
+        codes = [r["code"] for r in active] + [o["code"] for o in orders if o["status"] == "접수"]
+        if codes:
+            c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+            target = c1.selectbox("취소 처리할 번호", codes, key="adm_cancel")
+            if c2.button("취소 처리", key="adm_go"):
+                db_update("orders" if target.startswith("DR-") else "reservations", target, status="취소")
+                st.rerun()
+
+
+def page_lookup():
+    pagehead("예약 조회", "예약번호(KYU-…)나 주문번호(DR-…)와 이름으로 확인하고, 필요하면 취소할 수 있어요.")
+    _, mid, _ = st.columns([1, 2.2, 1])
+    with mid:
+        with st.container(key="lookup"):
+            code = st.text_input("예약번호 · 주문번호", placeholder="KYU-261117-AB12", key="l_code")
+            name = st.text_input("이름", placeholder="홍길동", max_chars=20, key="l_name")
+            if st.button("조회하기", type="primary", key="l_go"):
+                st.session_state["lk"] = (code.strip().upper(), name.strip())
+            q = st.session_state.get("lk")
+            if q and q[0]:
+                show_lookup(*q)
+    md('<div class="sp"></div>')
+    admin_panel()
 
 
 # ───────────────────────── 실행 ─────────────────────────
 # 다른 화면에 갔다 와도 입력한 값이 사라지지 않게 유지
 for _k in list(st.session_state.keys()):
-    if _k in ("kind", "b_day", "b_name", "d_cat", "d_name", "d_how", "d_when", "d_bus", "qty") \
+    if _k in ("kind", "b_day", "b_name", "b_campus", "map_campus", "d_cat", "d_name", "d_how", "d_when", "d_bus", "qty", "l_code", "l_name") \
             or _k.startswith(("route_", "time_", "board_", "alight_", "t_", "shot_")):
         st.session_state[_k] = st.session_state[_k]
 
@@ -732,7 +1033,7 @@ try:
 except Exception:
     pass
 
-{"홈": page_home, "버스 예약": page_bus, "음료 주문": page_drink}[page]()
+{"홈": page_home, "버스 예약": page_bus, "음료 주문": page_drink, "예약 조회": page_lookup}[page]()
 footer()
 
 if st.session_state.get("_last_page") != page:     # 화면을 바꾸면 맨 위로 이동
