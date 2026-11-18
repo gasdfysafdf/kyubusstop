@@ -2,3 +2,5 @@ streamlit>=1.40
 requests
 pandas
 pillow
+segno
+opencv-python-headless
