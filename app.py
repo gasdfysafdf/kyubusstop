@@ -50,19 +50,198 @@ CAMPUSES = {
                      lat=STOP_LAT, lon=STOP_LON, hours=OPEN_HOURS),
 }
 CAMPUS_LIST = list(CAMPUSES)
-# 특정 캠퍼스에만 가는 지역 노선은 여기에 적어요. 예: {"선사": ["글로벌캠퍼스"]}  (비워 두면 두 캠퍼스 모두)
-ROUTE_ONLY = {}
 SEAT_ROWS = 11                                                         # 좌석 줄 수 (한 줄 4석 → 44석)
-# (노선 이름, 구분) — 호차 번호는 화면에 표시하지 않아요
-REGIONAL = [("선사", "주중"), ("삼천중학교", "주중"), ("대전복합터미널", "주중"), ("송강", "주중"),
-            ("신탄진", "주중"), ("북세종", "주중"), ("남세종·공주", "주중"), ("아산·천안", "주중"),
-            ("청주·오송", "주중"), ("서울 노선", "주말"), ("인천·경기 노선", "주말"),
-            ("태안·서산·당진", "주말"), ("예산·홍성·광천·보령", "주말"), ("대전복합터미널", "주말"),
-            ("논산·대전", "방학")]
-LOOPS = {"메디컬캠퍼스": ["건양대 메디컬캠퍼스", "대전복합터미널", "대전역 동광장"]}   # ← 예시: 캠퍼스별 순환 노선 정류장
-TIMES = {"등교": ["07:30", "08:30"], "하교": ["17:30", "19:00"],       # ← 예시: 실제 출발 시간으로 수정
-         "순환": ["09:00", "12:00", "15:00"]}
-DAYS = {"주중": {0, 1, 2, 3, 4}, "주말": {4, 5, 6}}                   # 그 외(방학·셔틀)는 요일 제한 없음
+
+# ── 통학버스 시간표 (2026학년도 시간표 사진 기준) ──────────────────────────────
+# 한 노선은  R(구분, 분류, 노선이름, [ (정류장 이름, 시간), ... ], days=운행요일, note=안내문)  으로 적어요.
+#  · 구분: "등교"(캠퍼스로 오는 버스) / "하교"(캠퍼스에서 출발) / "순환"(셔틀·순환)
+#  · 시간이 하나면 하루 1회 운행, 시간을 [ ] 안에 여러 개 적으면 회차별 시간이에요.
+#  · 정류장 이름에 "대전캠퍼스"나 "논산캠퍼스"가 들어 있으면 그 캠퍼스 정류장으로 인식해요. 호차 번호는 화면에 표시하지 않아요.
+WEEKDAYS, FRI, SUN = {0, 1, 2, 3, 4}, {4}, {6}                       # 운행 요일 (월=0 … 일=6)
+CAMPUS_KEYS = {"대전캠퍼스": "메디컬캠퍼스", "논산캠퍼스": "글로벌캠퍼스"}   # 시간표 속 이름 → 이 앱의 캠퍼스 이름
+
+
+def R(kind, cls, title, stops, days=None, note=""):
+    names, times, camp = [], [], []
+    for s_ in stops:
+        names.append(s_[0])
+        times.append([s_[1]] if isinstance(s_[1], str) else list(s_[1]))
+        if len(s_) > 2:
+            camp.append({s_[2]} if isinstance(s_[2], str) else set(s_[2]))
+        else:
+            camp.append({v for k, v in CAMPUS_KEYS.items() if k in s_[0]})
+    if len({len(t) for t in times}) != 1:
+        raise ValueError(f"[{title}] 정류장마다 시간 개수가 달라요. 시간표를 다시 확인해 주세요.")
+    serves = set().union(*camp)                                   # 이 노선이 서는 캠퍼스들
+    shared = "각 1대씩" not in note + "".join(names)               # '각 1대씩'이면 캠퍼스마다 다른 버스, 아니면 한 대를 같이 타요
+    return dict(kind=kind, cls=cls, title=title, stops=names, times=times, campus_at=camp, days=days, note=note,
+                serves=serves, shared=shared)
+
+
+def _m(t):                      # "08:10" → 분
+    return int(t[:2]) * 60 + int(t[3:])
+
+
+def _t(m):                      # 분 → "08:10"
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def _every(a, b, step):         # a 부터 b 까지 step 분 간격 출발 시각들
+    return [_t(m) for m in range(_m(a), _m(b) + 1, step)]
+
+
+_LOOP_START = _every("08:00", "09:50", 10) + _every("10:00", "12:00", 20) + _every("13:00", "18:20", 20)
+_LOOP = [("암센터(간호대학) 앞 출발", 0, "메디컬캠퍼스"), ("죽헌정보관 정문 건너편", 1), ("관저시외버스 승차장 앞", 3),
+         ("파워존 앞 승강장 옆", 4), ("시외버스 하차장 (관저문예회관)", 5), ("암센터(간호대학) 앞 도착", 12, "메디컬캠퍼스")]
+
+BUS_ROUTES = [
+    # ── 캠퍼스 셔틀 ──
+    R("순환", "셔틀", "셔틀 · 논산 → 대전", [
+        ("논산캠퍼스 승강장", ["08:00", "09:00", "11:00", "13:00", "14:40", "15:40", "16:40", "17:40", "18:40", "19:40", "21:00"]),
+        ("연산 신 사거리", ["08:15", "09:15", "11:15", "13:15", "14:55", "15:55", "16:55", "17:55", "18:55", "19:55", "21:15"]),
+        ("양정삼거리 버스정류장", ["08:25", "09:25", "11:25", "13:25", "15:05", "16:05", "17:05", "18:05", "19:05", "20:05", "21:25"]),
+        ("LG전자베스트샵 관저점 앞", ["08:35", "09:35", "11:35", "13:35", "15:15", "16:15", "17:15", "18:15", "19:15", "20:15", "21:35"]),
+        ("대전캠퍼스 도착", ["08:40", "09:40", "11:40", "13:40", "15:20", "16:20", "17:20", "18:20", "19:20", "20:20", "21:40"]),
+    ]),
+    R("순환", "셔틀", "셔틀 · 대전 → 논산", [
+        ("대전캠퍼스 승강장", ["07:10", "07:40", "09:30", "10:30", "11:30", "12:30", "14:30", "16:30", "17:30", "18:30"]),
+        ("하이마트 관저점 앞", ["07:13", "07:43", "09:33", "10:33", "11:33", "12:33", "14:33", "16:33", "17:33", "18:33"]),
+        ("진잠타운 103동 옆", ["07:14", "07:44", "09:34", "10:34", "11:34", "12:34", "14:34", "16:34", "17:34", "18:34"]),
+        ("양정삼거리 주유소 옆", ["07:24", "07:54", "09:40", "10:40", "11:40", "12:40", "14:40", "16:40", "17:40", "18:40"]),
+        ("연산사거리 추어탕집 앞", ["07:30", "08:00", "09:46", "10:46", "11:46", "12:46", "14:46", "16:46", "17:46", "18:46"]),
+        ("논산캠퍼스 도착", ["07:48", "08:20", "10:10", "11:10", "12:10", "13:10", "15:10", "17:10", "18:10", "19:10"]),
+    ]),
+    # ── 주중 등교 (1~9호차) ──
+    R("등교", "주중", "주중 · 선사 → 건양대학교", [
+        ("선사병원 옆 선사유적지 출발", "07:20"), ("황실아파트 상가 앞 / (서대전고 약 3분)", "07:21"),
+        ("월평동 하나로APT 버스정류장 옆 / (서대전고 약 5분)", "07:22"), ("이마트트레이더스 건너편 (은평공원쪽)", "07:24"),
+        ("충대정문 네거리 GS주유소 앞", "07:27"), ("유성온천역 3번 출구 할매낙지 앞 / (유성고 약 10분)", "07:30"),
+        ("도안동 신한은행 LG 유플러스 앞 / (대전예고 약 10분)", "07:32"), ("도안 트리플시티 917동 옆 버스정류장 / (대전도안고 약 10분)", "07:33"),
+        ("도안 현대아이파크 205동 옆 버스정류장 / (대전도안고 약 10분)", "07:35"), ("목원대 네거리 버스정류장 / (대전체고 약 10분)", "07:38"),
+        ("도안 수.목.토 버스정류장(버스전용차선)", "07:42"), ("도안 베르디움 버스정류장(버스전용차선)", "07:44"),
+        ("가수원 육교 밑", "07:47"), ("대전캠퍼스 도착 (출발)", "07:50"), ("하이마트 관저점 앞", "07:55"),
+        ("진잠타운 103동 옆 도로변 버스정류장 / (대전도시과학고 약 10분)", "07:57"), ("양정삼거리 주유소 옆", "08:07"),
+        ("연산사거리 남원추어탕집 앞", "08:20"), ("논산캠퍼스 도착", "08:40"),
+    ], WEEKDAYS),
+    R("등교", "주중", "주중 · 삼천중학교 → 건양대학교", [
+        ("삼천중학교 정문 앞", "07:40"), ("탄방중학교 정문 앞 / (충남고 약 1분)", "07:43"), ("탄방동 한양아파트 상가 앞", "07:45"),
+        ("탄방동 대전고용복지센터 건너편 정류장(구 홈플러스)", "07:48"), ("둔산동 한밭주유소 옆 육교 밑", "07:50"),
+        ("경성큰마을네거리 대한제분 앞 시내버스 정류장 / (둔산여고 약 15분)", "07:52"), ("갈마3거리 서부농협 앞 / (둔산여고 약 10분)", "07:55"),
+        ("월평타운 건너편 버스정류장(대전일보 정류장)", "07:57"), ("원신흥동 신안 인스빌 앞 버스정류장(버스 전용차선)", "08:01"),
+        ("목원대 입구(옥녀봉사거리) 버스정류장(버스 전용차선) / (대전도안고 약 10분)", "08:03"),
+        ("도안 트리플시티 레이크포레 버스정류장(버스전용차선)", "08:04"), ("도안 수·목·토 버스정류장(버스 전용차선)", "08:05"),
+        ("도안 베르디움 버스정류장(버스 전용차선)", "08:07"), ("가수원 육교 계단 옆", "08:10"), ("대전캠퍼스 도착 (출발)", "08:15"),
+        ("하이마트 관저점 앞", "08:20"), ("진잠타운 103동 옆 도로변 버스정류장 / (대전도시과학고 약 10분)", "08:22"),
+        ("양정삼거리 주유소 옆", "08:32"), ("연산사거리 추어탕집 앞", "08:40"), ("논산캠퍼스 도착", "09:05"),
+    ], WEEKDAYS),
+    R("등교", "주중", "주중 · 대전복합터미널 → 건양대학교", [
+        ("복합터미널 건너편 호텔 선샤인 앞", "07:40"), ("가양도서관 버스정류장(영보교통 앞)", "07:41"),
+        ("가양동 현대서비스 옆 현대자동차대리점 앞", "07:42"), ("우송대 서캠퍼스 동문앞 버스정류장", "07:43"),
+        ("우송대학교 입구 한밭신협 앞 / (우송고 약 5분)", "07:45"), ("대동역1번 출구 대동크리닉 앞 / (대전여고 약 6분)", "07:47"),
+        ("신흥마을 아파트 102동 옆 후문 앞", "07:50"), ("판암역 2번 출구 앞", "07:53"), ("논산캠퍼스 도착", "08:50"),
+    ], WEEKDAYS),
+    R("등교", "주중", "주중 · 송강 → 건양대학교", [
+        ("송강동 북부여성가족원 버스정류장", "07:15"), ("롯데마트 옆 장배기공원 앞", "07:16"), ("중일고 정문 옆 네오미아 608동 앞 / (중일고 약 1분)", "07:20"),
+        ("대덕테크노 우림필유 1108동 앞 / (용산고 약 3분)", "07:21"), ("용산동 호반써밋 307동 건너편 버스정류장", "07:24"),
+        ("전민동 청구나래 아파트상가 앞 정류장(전민중학교 버스정류장)", "07:28"), ("전민동 삼성정밀연구소 앞 버스정류장 / (전민고 약 10분)", "07:30"),
+        ("만년동 초원아파트 옆 도로변 / (만년고 약 10분)", "07:40"), ("갤러리아백화점 옆 우리은행 앞 / (둔산여고 약 10분)", "07:42"),
+        ("경성큰마을 127동 건너편 대전평안교회 앞 / (둔원고 약 10분)", "07:45"), ("안골네거리 옆 노루페인트 앞 정류장", "07:47"),
+        ("서대전여고 후문 앞 / (서대전여고 약 1분)", "07:50"), ("도마 경남아파트 103동 앞 도로변", "07:52"), ("대전캠퍼스 도착 (출발)", "08:10"),
+        ("하이마트 관저점 앞", "08:15"), ("진잠타운 103동 옆 도로변 버스정류장 / (대전도시과학고 약 10분)", "08:17"),
+        ("양정삼거리 주유소 옆", "08:27"), ("연산사거리 추어탕집 앞", "08:35"), ("논산캠퍼스 도착", "09:00"),
+    ], WEEKDAYS),
+    R("등교", "주중", "주중 · 신탄진 → 건양대학교", [
+        ("신탄진역 옆 CU편의점 앞 / (신탄진고 약 15분)", "07:20"), ("신탄진 시온가스충전소 앞", "07:21"), ("신탄진 대원아파트 앞", "07:22"),
+        ("신탄진 한일병원 앞", "07:23"), ("와동 신대주공상가 옆 띠울석갈비 앞", "07:29"), ("읍내동 현대Ⓐ상가 현대의원 앞", "07:34"),
+        ("중리동 국세청 앞", "07:36"), ("중리동 중앙병원 앞", "07:40"), ("중리동 반도정형외과 앞", "07:42"), ("중리네거리 GS유원주유소 앞", "07:44"),
+        ("용전동 국토관리청 정문 앞", "07:46"), ("성남네거리 감리교회 옆 광장셀프주유소 앞", "07:50"), ("대전역동광장 오일뱅크주유소 앞", "07:52"),
+        ("논산캠퍼스 도착", "08:50"),
+    ], WEEKDAYS),
+    R("등교", "주중", "주중 · 북세종 → 건양대학교", [
+        ("나성동 주택금융공사(세종)앞 버스정류장 / (새롬고 5분, 대성고 5분)", "07:50"), ("홈플러스 세종점 맞은편 버스정류장", "07:58"),
+        ("범지기마을 4단지 버스정류장", "08:00"), ("범지기마을 1단지 버스정류장 / (아름고 5분)", "08:02"),
+        ("고운동 고운유치원앞 버스정류장 / (고운고 5분)", "08:05"), ("논산캠퍼스 도착", "08:50"),
+    ], WEEKDAYS),
+    R("등교", "주중", "주중 · 남세종·공주 → 건양대학교", [
+        ("[세종] 소담동 (새샘마을 3단지앞) 지선버스 정류장 / (소담고 3분)", "07:15"), ("[세종] 세종시청 (시의회,교육청,세무서) 지선버스 정류장", "07:17"),
+        ("[세종] 보람동 (호려울3단지앞) 지선버스 정류장 / (보람고 1분)", "07:19"), ("[세종] 대평동 (해들마을) 지선버스 정류장", "07:20"),
+        ("[세종] 세종고속시외버스 터미널버스정류장 / (주비뜰근린공원앞)", "07:22"), ("[세종] 가람동 (이마트앞) 지선버스 정류장 / (한솔고 10분)", "07:27"),
+        ("[공주] 공주신월초등학교 옆 해성빌딩 앞", "07:47"), ("[공주] 공주 이솔아파트 건너편", "07:48"), ("[공주] KB국민은행(신관점) 건너편 박외과 앞", "07:50"),
+        ("[공주] 신관동 공주가축약품 앞", "07:52"), ("[공주] 공주 구 터미널 옆 MG새마을금고 앞", "08:00"),
+        ("[공주] 이디야커피(중동점) 옆 로이젠신사복 앞 / (공주고, 영명고 5분)", "08:02"), ("[공주] LG베스트샵(금강옥룡점) 앞", "08:05"),
+        ("[공주] 공주대교 건너 아이젠아파트 정문", "08:08"), ("논산캠퍼스 도착", "09:00"),
+    ], WEEKDAYS),
+    R("등교", "주중", "주중 · 아산·천안 → 건양대학교", [
+        ("배방역 1번출구 건너편 버스정류장 / (배방고 약 30분)", "07:10"), ("천안아산역 아산시패션1광장 버스정류장 / (상용고 약 15분)", "07:20"),
+        ("불당동 쌍용도서관사거리 타이어테크 앞 / (월봉고 약 10분)", "07:22"), ("천안 이마트 건너편 신한은행 쌍용지점 앞", "07:25"),
+        ("천안역 서부역 입구삼거리 부동산 앞", "07:30"), ("천안시외버스터미널 건너편 농협(다이소) 앞 / (천안공고 약 10분)", "07:35"),
+        ("교보사거리 LG베스트샵 건너편(롯데리아 앞) / (천안제일고 약 5분)", "07:42"), ("익수당한의원 건너편(삼용교 앞) / (청수고 약 15분)", "07:45"),
+        ("청룡동 골프존파크(청룡구성점) 앞 / (천안여고 약 25분)", "07:50"), ("논산캠퍼스 도착", "08:50"),
+    ], WEEKDAYS),
+    R("등교", "주중", "주중 · 청주·오송 → 건양대학교", [
+        ("청주시청 정문 버스정류장 앞 / (청주대성고 약 5분)", "06:40"), ("청주종합운동장 삼거리옆 네파 앞 / (청주중앙여고 약 10분)", "06:45"),
+        ("청주고 정문 버스정류장 / (청주고 약 1분)", "06:49"), ("복대동 죽천교 버스정류장", "06:54"),
+        ("청주시외버스터미널 사거리옆 서청주 새마을금고 요양원 앞", "07:00"), ("오송역 6번출구 앞 / (오송고 약 20분)", "07:20"),
+        ("세종도램마을 지선버스승강장 / (도담고 약 10분) (도램마을 1105동 건너편, 세종중앙농협 앞) 출발", "07:40"),
+        ("정부세종청사 남측 지선버스승강장 (행정안전부 별관, 올리브영 앞) / (세종대성고 약 10분)", "07:44"),
+        ("나성동 지선버스승강장(명동프라자, 웰비뇨기과 앞) / (새롬고 약 15분)", "07:48"), ("세종시외버스 터미널 앞 건너편 버스정류장 / (보람고 약 20분)", "07:55"),
+        ("대전캠퍼스 도착", "08:15"),
+    ], WEEKDAYS, note='※ 논산캠퍼스까지 가려면 "주중 · 삼천중학교" 07:40 차량을 예약해 주세요.'),
+    # ── 주중 하교 / 순환 ──
+    R("하교", "주중", "주중 · 건양대학교 → 온천역", [
+        ("대전캠퍼스 간호대학 맞은편 (암센터 정문) - 출발", ["16:05", "18:05"]), ("대전캠퍼스 죽헌정보관 앞 승강장", ["16:06", "18:06"]),
+        ("도솔초등학교 버스정류장(베르디움(a)101동 맞은편)", ["16:09", "18:09"]), ("수·목·토(a) 버스정류장(버스전용차선)", ["16:12", "18:12"]),
+        ("아이파크(a) 버스정류장(버스전용차선)", ["16:14", "18:14"]), ("어울림하트(a) 네거리", ["16:16", "18:16"]),
+        ("도안고 정문 앞 건너편", ["16:18", "18:18"]), ("트리플시티 9단지 승강장", ["16:20", "18:20"]), ("롯데리아", ["16:22", "18:22"]),
+        ("도안마을 1단지 정문", ["16:23", "18:23"]), ("유성온천역 1번 출구 (하차)", ["16:35", "18:35"]),
+    ], WEEKDAYS, note="방학 중에는 운행하지 않아요."),
+    R("순환", "주중", "주중 · 대전 순환", [(n, [_t(_m(a) + o) for a in _LOOP_START]) + tuple(c) for n, o, *c in _LOOP], WEEKDAYS,
+      note="오전 08:00~09:50은 10분, 10:00~12:00과 오후 13:00~18:20은 20분 간격이에요. 정류장별 시간은 오후 첫차(13:00) 기준이에요. 공휴일에는 운행하지 않아요."),
+    # ── 주말: 금요일 하교 방향 ──
+    R("하교", "주말", "주말 · 건양대학교 → 서울 (금요일)", [
+        ("대전캠퍼스 / 논산캠퍼스 통학버스 승강장에서 각 1대씩 출발", "18:00"), ("안성 IC입구 (현대오일뱅크주유소 앞)", "19:10"),
+        ("경부고속도로(상행) 신갈 간이버스정류장 (수원학생)", "19:30"), ("경부고속도로(상행) 죽전 간이버스정류장 (용인학생)", "19:40"),
+        ("서울 교대역 9번출구 KEB하나은행 앞 도착", "20:00"),
+    ], FRI),
+    R("하교", "주말", "주말 · 건양대학교 → 인천·경기 (금요일)", [
+        ("대전캠퍼스 / 논산캠퍼스 통학버스 승강장에서 각 1대씩 출발", "18:00"), ("경부고속도로(상행) 오산IC 지나 오산쉼터 간이버스정류장", "19:30"),
+        ("안산터미널(성어공원) 앞 도착 / (송호고 약 10분)", "20:10"), ("원인재역 5번출구 정문앞 버스정류장 도착", "20:40"),
+    ], FRI),
+    R("하교", "주말", "주말 · 건양대학교 → 태안·서산·당진 (금요일)", [
+        ("대전캠퍼스 통학버스 승강장 출발", "17:10"), ("논산캠퍼스 통학버스 승강장 도착 / 출발", "18:00"),
+        ("당진 버스터미널(농협중앙회 당진시지부 건너편 버스정류장) / (호서고 약 15분)", "19:20"), ("타이어뱅크 서당진점 건너편 / (당진고 약 15분)", "19:25"),
+        ("서산의료원 석림사거리옆(신주공아파트 버스정류장) / (서산중앙고 약 7분)", "19:50"), ("태안터미널 옆 MG새마을금고 앞 도착", "20:20"),
+    ], FRI),
+    R("하교", "주말", "주말 · 건양대학교 → 예산·홍성·광천·보령 (금요일)", [
+        ("대전캠퍼스 통학버스 승강장 출발", "17:10"), ("논산캠퍼스 통학버스 승강장 도착 / 출발", "18:00"),
+        ("보령(대천)시외버스터미널 사거리", "19:00"), ("광천 단아래사거리 묘지나라 앞 / (한국K-POP고 약 10분)", "19:20"),
+        ("홍성 롯데마트 건너편 코오롱스포츠앞 / (홍성여고 약 20분)", "19:40"), ("예산 수덕사 IC입구 월곡 버스 정류장 도착", "20:00"),
+    ], FRI),
+    # ── 주말: 일요일 등교 방향 ──
+    R("등교", "주말", "주말 · 서울 → 건양대학교 (일요일)", [
+        ("서울 교대역 9번출구 KEB하나은행 앞 출발", "17:00"), ("경부고속도로(하행) 죽전 간이버스정류장 (용인학생)", "17:20"),
+        ("경부고속도로(하행) 신갈 간이버스정류장 (수원학생)", "17:25"), ("안성 IC입구 (현대오일뱅크주유소 앞)", "17:45"),
+        ("대전캠퍼스 / 논산캠퍼스 도착", "19:00"),
+    ], SUN, note="※ 대전캠퍼스행 / 논산캠퍼스행 차량이 각 1대씩 출발해요."),
+    R("등교", "주말", "주말 · 인천·경기 → 건양대학교 (일요일)", [
+        ("원인재역 5번출구 정문앞 버스정류장 출발 / (연수고 약 10분)", "16:30"), ("안산터미널(성어공원) 앞 / (송호고 약 10분)", "17:00"),
+        ("경부고속도로(하행) 오산IC 지나 오산쉼터 간이버스정류장", "17:30"), ("대전캠퍼스 / 논산캠퍼스 도착", "19:00"),
+    ], SUN, note="※ 대전캠퍼스행 / 논산캠퍼스행 차량이 각 1대씩 출발해요."),
+    R("등교", "주말", "주말 · 태안·서산·당진 → 건양대학교 (일요일)", [
+        ("태안터미널 옆 MG새마을금고 앞 출발", "16:00"), ("서산의료원 건너편 버스정류장 / (서산중앙고 약 7분)", "16:20"),
+        ("타이어뱅크 서당진점 앞 / (당진고 약 15분)", "16:45"), ("당진 버스터미널(농협중앙회 당진시지부 앞) 도착 / (호서고 약 15분)", "16:48"),
+        ("논산캠퍼스 도착 (출발)", "18:20"), ("대전캠퍼스 도착", "19:10"),
+    ], SUN),
+    R("등교", "주말", "주말 · 예산·홍성·광천·보령 → 건양대학교 (일요일)", [
+        ("예산 수덕사 IC입구 월곡 버스 정류장 출발(홍성방향)", "16:00"), ("홍성 롯데마트옆 코오롱스포츠 건너편 / (홍성여고 약 20분)", "16:20"),
+        ("광천 단아래사거리 묘지나라 건너편(광천IC방향) / (한국K-POP고 약 10분)", "16:40"), ("보령(대천)시외버스터미널 사거리 대천카센터 앞", "17:00"),
+        ("논산캠퍼스 도착 (출발)", "18:00"), ("대전캠퍼스 도착", "19:00"),
+    ], SUN),
+    R("등교", "주말", "주말 · 대전복합터미널 → 건양대학교 (일요일)", [
+        ("대전복합터미널 건너편 호텔 선샤인 앞 출발", "18:20"), ("대전역 동광장 현대오일뱅크(대동오거리방향) 앞", "18:28"), ("논산캠퍼스 도착", "19:10"),
+    ], SUN),
+]
+# 아직 시간표를 받지 못한 노선: 방학 · 논산↔대전(16호차), 주중 1~9호차의 하교 시간표
 
 # ── 음료 메뉴 (가격·설명은 모두 예시예요. 실제 메뉴판에 맞게 고쳐 주세요) ──
 #   name 이름 / price 가격(원) / desc 한 줄 설명 / c 컵 색상 2개 / ice_only ICE만 가능 / shot 샷 추가 가능 / tag 배지
@@ -98,25 +277,39 @@ PICKUP_WHEN = ["지금", "10분 후", "20분 후", "30분 후"]
 # ═════════════════════════════════════════════════════════════════════════════════
 
 WEEKDAY_KO = "월화수목금토일"
+
+
+def days_text(days) -> str:
+    return "월~금" if days == WEEKDAYS else "·".join(WEEKDAY_KO[d] for d in sorted(days)) + "요일"
 PAGES = ["홈", "버스 예약", "음료 주문", "예약 조회"]
 QUERY_TO_PAGE = {"bus": "버스 예약", "drink": "음료 주문", "lookup": "예약 조회", "home": "홈"}
 PAGE_TO_QUERY = {v: k for k, v in QUERY_TO_PAGE.items()}
 
 
 def routes_for(campus: str):
-    """선택한 캠퍼스에서 이용할 수 있는 노선: 구분 → {노선 표시이름: (분류, 정류장 순서)}"""
+    """선택한 캠퍼스에서 이용할 수 있는 노선: 구분 → {노선 이름: 노선 정보(+ 승차 가능 정류장, 정류장별 하차 가능 정류장)}"""
     r = {"등교": {}, "하교": {}, "순환": {}}
-    me = f"건양대 {campus}"
-    for n, k in REGIONAL:
-        if campus not in ROUTE_ONLY.get(n, CAMPUS_LIST):
-            continue
-        r["등교"][f"{k} · {n} → 건양대학교"] = (k, [n, me])      # 등교: 이 캠퍼스로 오는 버스
-        r["하교"][f"{k} · 건양대학교 → {n}"] = (k, [me, n])      # 하교: 이 캠퍼스에서 출발
-    for o in CAMPUS_LIST:                                         # 셔틀: 이 캠퍼스에서 출발해 다른 캠퍼스로
-        if o != campus:
-            r["순환"][f"셔틀 · {CAMPUSES[campus]['city']} → {CAMPUSES[o]['city']}"] = ("셔틀", [me, f"건양대 {o}"])
-    if campus in LOOPS:
-        r["순환"][f"주중 · {CAMPUSES[campus]['city']} 순환"] = ("주중", LOOPS[campus])
+    for rt in BUS_ROUTES:
+        stops, last = rt["stops"], len(rt["stops"]) - 1
+        mine = [i for i, cs in enumerate(rt["campus_at"]) if campus in cs]      # 이 캠퍼스 정류장 위치
+        if rt["kind"] == "등교":                      # 이 캠퍼스로 오는 버스: 앞 정류장에서 타서 이 캠퍼스에서 내려요
+            ci = [i for i in mine if i > 0]
+            if not ci:
+                continue
+            board = stops[:ci[0]]
+            alight_for = {x: [stops[ci[0]]] for x in board}
+        elif rt["kind"] == "하교":                    # 이 캠퍼스에서 출발: 이 캠퍼스에서 타요
+            ci = [i for i in mine if i < last]
+            if not ci:
+                continue
+            board = [stops[i] for i in ci]
+            alight_for = {stops[i]: stops[i + 1:] for i in ci}
+        else:                                         # 셔틀·순환: 이 캠퍼스에서 출발하는 것만
+            if 0 not in mine:
+                continue
+            board = stops[:-1]
+            alight_for = {stops[i]: stops[i + 1:] for i in range(last)}
+        r[rt["kind"]][rt["title"]] = dict(rt, board=board, alight_for=alight_for)
     return r
 
 
@@ -321,10 +514,14 @@ def db_update(t, code, **vals):
 
 
 def taken_seats(campus, kind, route, day, time_):
+    rt = next((x for x in BUS_ROUTES if x["title"] == route), None)
+    # 두 캠퍼스 학생이 한 대를 같이 타는 노선이면 두 캠퍼스의 예약을 모두 합쳐서 좌석을 확인해요
+    scope = [c for c in CAMPUS_LIST if c in rt["serves"]] if rt and rt["shared"] else [campus]
     try:
         rows = []
-        for stt in ("예약", "탑승완료"):          # 이미 탄 사람의 좌석도 계속 '예약됨'으로 보여요
-            rows += db_select("reservations", campus=campus, kind=kind, route=route, ride_date=day, depart_time=time_, status=stt)
+        for c in scope:
+            for stt in ("예약", "탑승완료"):          # 이미 탄 사람의 좌석도 계속 '예약됨'으로 보여요
+                rows += db_select("reservations", campus=c, kind=kind, route=route, ride_date=day, depart_time=time_, status=stt)
         return {r["seat"] for r in rows}
     except Exception as e:
         st.warning(f"좌석 정보를 불러오지 못했어요. {explain(e)}")
@@ -568,6 +765,9 @@ background:radial-gradient(60% 140% at 100% 120%,rgba(247,184,133,.95),transpare
 .tl i{width:15px;height:15px;border-radius:50%;background:#fff;border:3px solid #C9D6CE;flex:none;position:relative;z-index:1}
 .tl li.on{color:var(--ink)}.tl li.on i{border-color:var(--g2);background:var(--g2)}
 .tl em{font-style:normal;margin-left:auto;font-size:12.5px;font-weight:800;color:var(--gd);background:var(--led);padding:3px 11px;border-radius:99px}
+.tl .tm{font-variant-numeric:tabular-nums;font-weight:800;font-size:13px;color:var(--g2);min-width:44px}
+.tl .nm{min-width:0;line-height:1.45;word-break:keep-all}
+.tl li.gap .nm{color:var(--mut);font-weight:600;font-size:13px}
 .warnchip{display:inline-block;margin-top:12px;padding:5px 12px;border-radius:99px;background:#FFE8D2;color:#A5571B;font-weight:800;font-size:13px}
 .codewarn{display:flex;gap:12px;align-items:flex-start;margin:0 0 16px;padding:14px 16px;border-radius:18px;background:#FFF1E0;border:2px solid #F0A55C;color:#7A3F0E;line-height:1.6;font-size:14.5px}
 .codewarn .cw-ic{flex:none;width:26px;height:26px;margin-top:1px;border-radius:50%;background:#E8741C;color:#fff;display:grid;place-items:center;font-size:16px;font-weight:900;font-style:normal}
@@ -831,13 +1031,22 @@ def cancel_box(table: str, code: str, label: str, pfx: str, ticket_key=None, msg
         st.button(label, key=f"{pfx}_ask", on_click=ask_cancel, args=(flag, code))
 
 
-def timeline(stops, board, alight) -> str:
+def timeline(stops, board, alight, times=None) -> str:
+    """내가 타는 구간(승차 → 하차)만 시간과 함께 보여줘요. 정류장이 많으면 가운데는 줄여서 보여줘요."""
     bi, ai = stops.index(board), stops.index(alight)
-    li = []
-    for i, s in enumerate(stops):
+
+    def item(i):
         mark = "승차" if i == bi else "하차" if i == ai else ""
-        li.append(f'<li class="{"on" if bi <= i <= ai else ""}"><i></i><span>{esc(s)}</span>{f"<em>{mark}</em>" if mark else ""}</li>')
-    return f'<ul class="tl">{"".join(li)}</ul>'
+        tm = f'<span class="tm">{esc(times[i])}</span>' if times else ""
+        return f'<li class="on"><i></i>{tm}<span class="nm">{esc(stops[i])}</span>{f"<em>{mark}</em>" if mark else ""}</li>'
+    seg = list(range(bi, ai + 1))
+    if len(seg) > 9:
+        parts = ([item(i) for i in seg[:4]]
+                 + [f'<li class="on gap"><i></i><span class="nm">중간 {len(seg) - 8}개 정류장 경유</span></li>']
+                 + [item(i) for i in seg[-4:]])
+    else:
+        parts = [item(i) for i in seg]
+    return f'<ul class="tl">{"".join(parts)}</ul>'
 
 
 # ───────────────────────── 공통 레이아웃 ─────────────────────────
@@ -934,19 +1143,20 @@ def home_inside():
 
 
 def home_routes():
-    groups = [("주중", "w", "평일에 운행하는 노선"), ("주말", "e", "주말에 운행하는 노선"),
-              ("방학", "v", "방학 중에 운행하는 노선"), ("셔틀", "s", "캠퍼스 사이를 오가는 셔틀")]
+    groups = [("주중", "w", "평일에 운행하는 노선"), ("주말", "e", "금요일·일요일에 운행하는 노선"),
+              ("셔틀", "s", "캠퍼스 사이를 오가는 셔틀")]
     out = [f'<div id="routes" class="sec">{nextstop(5, "운행 노선")}<h2>어디서든 학교까지</h2>'
-           '<p class="lead">지역별 통학 노선과 캠퍼스 셔틀이에요. 버스 예약 화면에서 등교·하교·순환을 골라 예약하세요.</p>']
+           '<p class="lead">2026학년도 통학버스 노선이에요. 버스 예약 화면에서 캠퍼스를 고르면 그곳에서 이용할 수 있는 버스가 나와요.</p>']
     for k, c, desc in groups:
-        if k == "셔틀":
-            cards = [("논산 → 대전", "순환"), ("대전 → 논산", "순환")]
-        else:
-            cards = [(n, "등교 · 하교") for n, kk in REGIONAL if kk == k]
-            if k == "주중":
-                cards.append(("대전 순환", "순환"))
+        rts = [rt for rt in BUS_ROUTES if rt["cls"] == k]
+        if not rts:
+            continue
         out.append(f'<div class="rgroup"><h3>{k}</h3><span>{desc}</span></div><div class="rgrid">')
-        out += [f'<div class="rc {c}"><span class="k {c}">{k}</span><b>{esc(n)}</b><small>{s}</small></div>' for n, s in cards]
+        for rt in rts:
+            n, first = len(rt["times"][0]), rt["times"][0][0]
+            small = f'{rt["kind"]} · ' + (f"하루 {n}회" if n > 1 else f"{first} 출발")
+            name = rt["title"].split(" · ", 1)[1]
+            out.append(f'<div class="rc {c}"><span class="k {c}">{k}</span><b>{esc(name)}</b><small>{small}</small></div>')
         out.append("</div>")
     out.append("</div>")
     md("".join(out))
@@ -998,18 +1208,25 @@ def page_bus():
                 st.info("이 캠퍼스에는 해당 구분의 노선이 아직 없어요.")
                 return
             route = st.selectbox("노선", list(routes[kind]), key=f"route_{campus}_{kind}")
-            rk, stops = routes[kind][route]
+            rt = routes[kind][route]
+            stops, times, days = rt["stops"], rt["times"], rt["days"]
             md('<div class="fs"><em>2</em>탑승 정보</div>')
             c1, c2 = st.columns(2)
-            time_ = c1.selectbox("출발 시간", TIMES[kind], key=f"time_{kind}")
-            today = now_kst().date()
-            day = c2.date_input("탑승일", value=today, min_value=today, max_value=today + timedelta(days=30),
-                                format="YYYY-MM-DD", key="b_day")
-            if rk in DAYS:
-                st.caption("주중 노선은 월~금에 운행해요." if rk == "주중" else "주말 노선은 금·토·일에 운행해요.")
+            board = c1.selectbox("승차 정류장", rt["board"], key=f"board_{campus}_{route}")
+            alight = c2.selectbox("하차 정류장", rt["alight_for"][board], key=f"alight_{campus}_{route}_{board}")
+            bi, ai = stops.index(board), stops.index(alight)
             c3, c4 = st.columns(2)
-            board = c3.selectbox("승차 정류장", stops[:-1], key=f"board_{campus}_{route}")
-            alight = c4.selectbox("하차 정류장", stops[stops.index(board) + 1:], key=f"alight_{campus}_{route}_{board}")
+            today = now_kst().date()
+            day = c3.date_input("탑승일", value=today, min_value=today, max_value=today + timedelta(days=30),
+                                format="YYYY-MM-DD", key="b_day")
+            run = c4.selectbox("승차 시간", list(range(len(times[0]))), format_func=lambda j: times[bi][j], key=f"time_{campus}_{route}")
+            time_ = times[0][run]                      # 같은 버스(회차)를 구분하는 기준 = 첫 정류장 출발 시간
+            btime, atime = times[bi][run], times[ai][run]
+            run_times = [t[run] for t in times]
+            if days:
+                st.caption(f"이 노선은 {days_text(days)}에만 운행해요.")
+            if rt["note"]:
+                st.caption(rt["note"])
             md('<div class="fs"><em>3</em>좌석 선택</div>')
             day_s = f"{day:%Y-%m-%d}"
             taken = taken_seats(campus, kind, route, day_s, time_)
@@ -1027,8 +1244,8 @@ def page_bus():
             if st.button("좌석 예약하기", type="primary", key="b_go"):
                 if not name.strip():
                     st.error("이름을 입력해 주세요.")
-                elif rk in DAYS and day.weekday() not in DAYS[rk]:
-                    st.error(f"{route}은(는) {'월~금' if rk == '주중' else '금·토·일'}에만 운행해요. 탑승일을 바꿔 주세요.")
+                elif days and day.weekday() not in days:
+                    st.error(f"{route}은(는) {days_text(days)}에만 운행해요. 탑승일을 바꿔 주세요.")
                 elif not seat:
                     st.error("좌석을 선택해 주세요.")
                 elif seat in taken_seats(campus, kind, route, day_s, time_):
@@ -1037,15 +1254,15 @@ def page_bus():
                     code = new_code("reservations", "K-")
                     row = dict(code=code, created_at=now_kst().isoformat(timespec="seconds"), campus=campus, kind=kind,
                                route=route, ride_date=day_s, depart_time=time_, name=name.strip(),
-                               board_stop=board, alight_stop=alight, seat=seat, status="예약")
+                               board_stop=f"{btime} {board}", alight_stop=f"{atime} {alight}", seat=seat, status="예약")
                     try:
                         db_insert("reservations", row)
                     except Exception as e:
                         st.error(f"저장에 실패했어요. {explain(e)}")
                     else:
                         ss["ticket"] = dict(code=code, kind=kind, route=route, campus=campus, seat=seat, time=time_, day=day_s,
-                                            when=f"{day.month}월 {day.day}일 ({WEEKDAY_KO[day.weekday()]}) {time_}",
-                                            name=name.strip(), board=board, alight=alight, stops=stops)
+                                            when=f"{day.month}월 {day.day}일 ({WEEKDAY_KO[day.weekday()]}) {btime}",
+                                            name=name.strip(), board=board, alight=alight, stops=stops, times=run_times)
                         ss["nonce"] = ss.get("nonce", 0) + 1
                         st.toast("예약이 완료됐어요!", icon="✅")
                         st.rerun()
@@ -1057,7 +1274,7 @@ def page_bus():
         if t:
             md(code_warning("bus"))
             pass_card("예약이 완료됐어요", t["code"], esc(f"{t['campus']} · {t['kind']} · {t['route']}"),
-                      timeline(t["stops"], t["board"], t["alight"])
+                      timeline(t["stops"], t["board"], t["alight"], t.get("times"))
                       + f'<dl><dt>탑승</dt><dd>{esc(t["when"])}</dd><dt>좌석</dt><dd>{esc(t["seat"])}</dd><dt>이름</dt><dd>{esc(t["name"])}</dd></dl>',
                       ok=True, note="탑승할 때 학생증과 아래 QR(또는 예약번호)을 보여 주세요. 예약번호는 음료 주문·예약 조회 화면에서도 쓸 수 있어요. 취소는 아래 버튼이나 ‘예약 조회’ 탭에서 할 수 있어요.")
             qr_block(t["code"], "탑승할 때 이 QR을 보여 주세요")
@@ -1066,10 +1283,10 @@ def page_bus():
             st.button("다른 좌석 예약하기", key="b_new", on_click=clear_key, args=("ticket",))
         else:
             warn = ""
-            if rk in DAYS and day.weekday() not in DAYS[rk]:
+            if days and day.weekday() not in days:
                 warn = '<span class="warnchip">이 날은 운행하지 않아요. 탑승일을 바꿔 주세요.</span>'
-            pass_card("승차권 미리보기", esc(route), f"{day.month}월 {day.day}일 ({WEEKDAY_KO[day.weekday()]}) · {time_}",
-                      timeline(stops, board, alight)
+            pass_card("승차권 미리보기", esc(route), f"{day.month}월 {day.day}일 ({WEEKDAY_KO[day.weekday()]}) · {btime} 승차",
+                      timeline(stops, board, alight, run_times)
                       + f'<dl><dt>캠퍼스</dt><dd>{esc(campus)}</dd><dt>구분</dt><dd>{esc(kind)}</dd><dt>좌석</dt><dd>{esc(seat) if seat else "선택 전"}</dd>'
                         f'<dt>이름</dt><dd>{esc(name.strip()) or "입력 전"}</dd></dl>{warn}')
             md("""<ul class="notes"><li>탑승일은 오늘부터 30일 뒤까지 고를 수 있어요.</li>
