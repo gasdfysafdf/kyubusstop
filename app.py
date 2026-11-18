@@ -168,8 +168,25 @@ def won(n: int) -> str:
     return f"{n:,}원"
 
 
-def rand4() -> str:
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # 헷갈리는 글자(0·O, 1·I)는 뺐어요
+
+
+def new_code(table: str, prefix: str) -> str:
+    """짧은 번호를 만들어요. 예: K-7HQ3X (버스 예약), D-4TM9B (음료 주문)"""
+    code = ""
+    for _ in range(10):
+        code = prefix + "".join(random.choices(CODE_CHARS, k=5))
+        try:
+            if not db_select(table, code=code):
+                break
+        except Exception:
+            break          # 조회가 안 되면 저장할 때 진짜 오류 이유를 보여 줘요
+    return code
+
+
+def is_order(code: str) -> bool:
+    """D-… 와 예전 번호 DR-… 은 음료 주문, 나머지는 버스 예약"""
+    return code.startswith(("D-", "DR-"))
 
 
 FIELDS = {
@@ -1017,7 +1034,7 @@ def page_bus():
                 elif seat in taken_seats(campus, kind, route, day_s, time_):
                     st.error("방금 다른 분이 이 좌석을 예약했어요. 다른 좌석을 골라 주세요.")
                 else:
-                    code = f"KYU-{day:%y%m%d}-{rand4()}"
+                    code = new_code("reservations", "K-")
                     row = dict(code=code, created_at=now_kst().isoformat(timespec="seconds"), campus=campus, kind=kind,
                                route=route, ride_date=day_s, depart_time=time_, name=name.strip(),
                                board_stop=board, alight_stop=alight, seat=seat, status="예약")
@@ -1140,7 +1157,7 @@ def page_drink():
                 name = st.text_input("이름", placeholder="홍길동", max_chars=20, key="d_name")
                 how = st.radio("수령 방법", PICKUP_HOW, horizontal=True, key="d_how")
                 when = st.selectbox("수령 시간", PICKUP_WHEN, key="d_when")
-                bus = st.text_input("버스 예약번호 (선택)", placeholder="KYU-261117-AB12", key="d_bus")
+                bus = st.text_input("버스 예약번호 (선택)", placeholder="K-7HQ3X", key="d_bus")
                 if st.button("음료 주문하기", type="primary", key="d_order"):
                     if not cart:
                         st.error("먼저 메뉴를 담아 주세요.")
@@ -1150,7 +1167,7 @@ def page_drink():
                         lines = [(it["n"], f'{it["t"]}{" · 샷 추가" if it["s"] else ""} · {it["q"]}잔') for it in cart]
                         items_txt = ", ".join(f"{n}({q})" for n, q in lines)
                         total = cart_total(cart)
-                        code = f"DR-{now_kst():%H%M}-{rand4()}"
+                        code = new_code("orders", "D-")
                         bus_c = bus.strip().upper()
                         try:
                             if bus_c and not db_select("reservations", code=bus_c):
@@ -1170,7 +1187,7 @@ def page_drink():
 
 # ───────────────────────── 예약 조회 · 취소 / 관리자 ─────────────────────────
 def show_lookup(code: str, name: str):
-    table = "orders" if code.startswith("DR-") else "reservations"
+    table = "orders" if is_order(code) else "reservations"
     try:
         rows = db_select(table, code=code)
     except Exception as e:
@@ -1254,11 +1271,11 @@ def check_panel():
             code = decode_qr(shot)
             if not code:
                 st.warning("QR을 읽지 못했어요. 더 가까이, 밝은 곳에서 다시 찍거나 번호를 직접 입력해 주세요.")
-    typed = st.text_input("번호 직접 입력 (QR이 안 읽힐 때)", placeholder="KYU-261117-AB12", key=f"chk_txt_{n}")
+    typed = st.text_input("번호 직접 입력 (QR이 안 읽힐 때)", placeholder="K-7HQ3X", key=f"chk_txt_{n}")
     code = code or typed.strip().upper()
     if not code:
         return
-    table = "orders" if code.startswith("DR-") else "reservations"
+    table = "orders" if is_order(code) else "reservations"
     try:
         rows = db_select(table, code=code)
     except Exception as e:
@@ -1345,18 +1362,18 @@ def admin_panel():
             target = c1.selectbox("취소 처리할 번호", codes, key="adm_cancel")
             if c2.button("취소 처리", key="adm_go"):
                 try:
-                    db_update("orders" if target.startswith("DR-") else "reservations", target, status="취소")
+                    db_update("orders" if is_order(target) else "reservations", target, status="취소")
                     st.rerun()
                 except Exception as e:
                     st.error(explain(e))
 
 
 def page_lookup():
-    pagehead("예약 조회", "예약번호(KYU-…)나 주문번호(DR-…)와 이름으로 확인하고, 필요하면 취소할 수 있어요.", "TICKET · 예약 조회")
+    pagehead("예약 조회", "예약번호(K-…)나 주문번호(D-…)와 이름으로 확인하고, 필요하면 취소할 수 있어요.", "TICKET · 예약 조회")
     _, mid, _ = st.columns([1, 2.2, 1])
     with mid:
         with st.container(key="lookup"):
-            code = st.text_input("예약번호 · 주문번호", placeholder="KYU-261117-AB12", key="l_code")
+            code = st.text_input("예약번호 · 주문번호", placeholder="K-7HQ3X", key="l_code")
             name = st.text_input("이름", placeholder="홍길동", max_chars=20, key="l_name")
             st.caption("번호를 잊어버리면 조회도 취소도 할 수 없어요. 예약번호·주문번호는 꼭 저장해 두세요.")
             if st.button("조회하기", type="primary", key="l_go"):
