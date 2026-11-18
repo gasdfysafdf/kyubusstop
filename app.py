@@ -11,6 +11,17 @@ import string
 from datetime import date, datetime, timedelta, timezone
 from html import escape as esc
 from pathlib import Path
+
+try:                       # QR 그림을 만드는 도구 (없으면 QR만 빠지고 나머지는 그대로 동작해요)
+    import segno
+except Exception:
+    segno = None
+try:                       # 직원용 카메라 QR 읽기 도구 (없으면 번호 직접 입력만 써요)
+    import cv2
+    import numpy as np
+    from PIL import Image
+except Exception:
+    cv2 = None
 from urllib.parse import quote
 
 import pandas as pd
@@ -294,7 +305,9 @@ def db_update(t, code, **vals):
 
 def taken_seats(campus, kind, route, day, time_):
     try:
-        rows = db_select("reservations", campus=campus, kind=kind, route=route, ride_date=day, depart_time=time_, status="예약")
+        rows = []
+        for stt in ("예약", "탑승완료"):          # 이미 탄 사람의 좌석도 계속 '예약됨'으로 보여요
+            rows += db_select("reservations", campus=campus, kind=kind, route=route, ride_date=day, depart_time=time_, status=stt)
         return {r["seat"] for r in rows}
     except Exception as e:
         st.warning(f"좌석 정보를 불러오지 못했어요. {explain(e)}")
@@ -543,6 +556,10 @@ background:radial-gradient(60% 140% at 100% 120%,rgba(247,184,133,.95),transpare
 .codewarn .cw-ic{flex:none;width:26px;height:26px;margin-top:1px;border-radius:50%;background:#E8741C;color:#fff;display:grid;place-items:center;font-size:16px;font-weight:900;font-style:normal}
 .codewarn strong{display:block;font-size:15.5px;margin-bottom:2px;color:#6A3208}
 .cancelask{margin:8px 0 10px;padding:12px 14px;border-radius:14px;background:#FFE8EC;color:#9A3A52;font-weight:700;font-size:14.5px;line-height:1.6}
+.qrbox{margin:16px 0 10px;padding:20px 18px 16px;border-radius:24px;background:#fff;border:2px solid var(--g);box-shadow:6px 6px 0 rgba(156,203,234,.6);text-align:center}
+.qrbox img{display:block;margin:0 auto;width:min(240px,72%);height:auto;image-rendering:pixelated}
+.qrbox .qrcode{margin-top:10px;font-weight:800;letter-spacing:.04em;font-size:15px;color:var(--g);font-variant-numeric:tabular-nums}
+.qrbox .qrhint{margin-top:4px;color:var(--mut);font-size:13px}
 .notes{margin:20px 4px 0;padding:0;list-style:none;display:grid;gap:8px;color:var(--mut);font-size:14px;line-height:1.6}
 .notes li{display:flex;gap:10px}.notes li:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--sun);margin-top:9px;flex:none}
 .ol{display:grid;gap:10px;margin:0}.ol div{display:flex;justify-content:space-between;gap:14px;font-weight:700}.ol small{display:block;color:var(--mut);font-weight:500}
@@ -728,10 +745,27 @@ def pass_card(label, title, sub, body, ok=False, note=""):
 def code_warning(kind: str) -> str:
     """번호를 잊지 않도록 알려 주는 경고 상자"""
     if kind == "bus":
-        t, d = "예약번호를 꼭 기억하세요!", "예약번호가 없으면 셔틀을 탈 수 없어요. 지금 화면을 캡처하거나, 아래 복사 버튼으로 번호를 저장해 두세요."
+        t, d = "예약 QR(번호)을 꼭 저장하세요!", "QR이나 예약번호가 없으면 셔틀을 탈 수 없어요. 아래 ‘QR 이미지 저장하기’를 누르거나 화면을 캡처해 두세요."
     else:
-        t, d = "주문번호를 꼭 기억하세요!", "주문번호가 없으면 음료를 받을 수 없어요. 지금 화면을 캡처하거나, 아래 복사 버튼으로 번호를 저장해 두세요."
+        t, d = "주문 QR(번호)을 꼭 저장하세요!", "QR이나 주문번호가 없으면 음료를 받을 수 없어요. 아래 ‘QR 이미지 저장하기’를 누르거나 화면을 캡처해 두세요."
     return f'<div class="codewarn" role="alert"><b class="cw-ic">!</b><div><strong>{t}</strong>{d}</div></div>'
+
+
+@st.cache_data(show_spinner=False)
+def qr_png(code: str) -> bytes:
+    buf = io.BytesIO()
+    segno.make(code, error="m", micro=False).save(buf, kind="png", scale=10, border=3, dark="#07261C")
+    return buf.getvalue()
+
+
+def qr_block(code: str, hint: str):
+    """예약·주문 번호를 QR 그림으로 보여 주고, 이미지로 저장할 수 있게 해요"""
+    if segno is None:
+        return
+    png = qr_png(code)
+    md(f'<div class="qrbox"><img src="data:image/png;base64,{base64.b64encode(png).decode()}" alt="{esc(code)} QR">'
+       f'<div class="qrcode">{esc(code)}</div><div class="qrhint">{hint}</div></div>')
+    st.download_button("QR 이미지 저장하기", png, f"{code}.png", "image/png", key=f"qrdl_{code}", type="primary")
 
 
 def bus_cancelable(day: str, time_: str) -> bool:
@@ -1008,8 +1042,8 @@ def page_bus():
             pass_card("예약이 완료됐어요", t["code"], esc(f"{t['campus']} · {t['kind']} · {t['route']}"),
                       timeline(t["stops"], t["board"], t["alight"])
                       + f'<dl><dt>탑승</dt><dd>{esc(t["when"])}</dd><dt>좌석</dt><dd>{esc(t["seat"])}</dd><dt>이름</dt><dd>{esc(t["name"])}</dd></dl>',
-                      ok=True, note="탑승할 때 학생증과 예약번호를 보여 주세요. 예약번호는 음료 주문·예약 조회 화면에서도 쓸 수 있어요. 취소는 아래 버튼이나 ‘예약 조회’ 탭에서 할 수 있어요.")
-            st.code(t["code"], language=None)
+                      ok=True, note="탑승할 때 학생증과 아래 QR(또는 예약번호)을 보여 주세요. 예약번호는 음료 주문·예약 조회 화면에서도 쓸 수 있어요. 취소는 아래 버튼이나 ‘예약 조회’ 탭에서 할 수 있어요.")
+            qr_block(t["code"], "탑승할 때 이 QR을 보여 주세요")
             if bus_cancelable(t["day"], t["time"]):
                 cancel_box("reservations", t["code"], "이 예약 취소하기", "bk", "ticket", "b_cancelled")
             st.button("다른 좌석 예약하기", key="b_new", on_click=clear_key, args=("ticket",))
@@ -1086,7 +1120,7 @@ def page_drink():
                           f'<div class="ol">{rows}</div><div class="tot"><span>합계</span><b>{won(order["total"])}</b></div>'
                           f'<dl><dt>이름</dt><dd>{esc(order["name"])}</dd></dl>',
                           ok=True, note="1층 카운터에서 주문번호를 말씀해 주세요. 결제는 수령할 때 카운터에서 해요. 취소는 아래 버튼이나 ‘예약 조회’ 탭에서 할 수 있어요.")
-                st.code(order["code"], language=None)
+                qr_block(order["code"], "음료를 받을 때 이 QR을 보여 주세요")
                 cancel_box("orders", order["code"], "이 주문 취소하기", "dk", "d_ticket", "d_cancelled")
                 st.button("새로 주문하기", key="d_new", on_click=clear_key, args=("d_ticket",))
             else:
@@ -1152,7 +1186,10 @@ def show_lookup(code: str, name: str):
                   f'<dl><dt>탑승</dt><dd>{esc(row["ride_date"])} {esc(row["depart_time"])}</dd>'
                   f'<dt>구간</dt><dd>{esc(row["board_stop"])} → {esc(row["alight_stop"])}</dd>'
                   f'<dt>좌석</dt><dd>{esc(row["seat"])}</dd><dt>이름</dt><dd>{esc(row["name"])}</dd></dl>', ok=not done)
-        if not done:
+        if row["status"] == "탑승완료":
+            st.caption("이미 탑승 처리된 예약이에요.")
+        if row["status"] == "예약":
+            qr_block(row["code"], "탑승할 때 이 QR을 보여 주세요")
             when = datetime.fromisoformat(f'{row["ride_date"]} {row["depart_time"]}').replace(tzinfo=KST)
             if when > now_kst():
                 cancel_box("reservations", row["code"], "예약 취소하기", "lc")
@@ -1162,7 +1199,10 @@ def show_lookup(code: str, name: str):
         pass_card(f"음료 주문 · {row['status']}", row["code"], esc(f"{row['pickup_how']} · {row['pickup_when']}"),
                   f'<div class="ol"><div><span>{esc(row["items"])}</span></div></div>'
                   f'<div class="tot"><span>합계</span><b>{won(int(row["total"] or 0))}</b></div>', ok=not done)
-        if not done:
+        if row["status"] == "수령완료":
+            st.caption("이미 수령한 주문이에요.")
+        if row["status"] == "접수":
+            qr_block(row["code"], "음료를 받을 때 이 QR을 보여 주세요")
             cancel_box("orders", row["code"], "주문 취소하기", "lc")
 
 
@@ -1171,6 +1211,78 @@ def show_df(df):
         st.dataframe(df, width="stretch", hide_index=True)      # 최신 Streamlit
     except Exception:
         st.dataframe(df, use_container_width=True, hide_index=True)   # 구버전
+
+
+def decode_qr(file) -> str:
+    """카메라로 찍은 사진에서 QR 글자를 읽어요"""
+    if cv2 is None:
+        return ""
+    try:
+        img = Image.open(file).convert("RGB")
+        det = cv2.QRCodeDetector()
+        for scale in (1.0, 0.5):
+            im = img if scale == 1.0 else img.resize((int(img.width * scale), int(img.height * scale)))
+            txt, _, _ = det.detectAndDecode(cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR))
+            if txt:
+                return txt.strip().upper()
+    except Exception:
+        pass
+    return ""
+
+
+def chk_done(table: str, code: str, status: str):
+    try:
+        db_update(table, code, status=status)
+    except Exception as e:
+        st.session_state["chk_msg"] = ("err", explain(e))
+    else:
+        st.session_state["chk_msg"] = ("ok", f"{code} · {status} 처리했어요.")
+        st.session_state["chk_n"] = st.session_state.get("chk_n", 0) + 1   # 입력칸·카메라 비우기
+
+
+def check_panel():
+    """직원용: QR을 찍거나 번호를 넣으면 내용을 보여 주고, 탑승·수령 처리를 해요"""
+    ss = st.session_state
+    msg = ss.pop("chk_msg", None)
+    if msg:
+        (st.success if msg[0] == "ok" else st.error)(msg[1])
+    n = ss.get("chk_n", 0)
+    code = ""
+    if cv2 is not None:
+        shot = st.camera_input("QR을 카메라로 찍어 주세요", key=f"chk_cam_{n}")
+        if shot:
+            code = decode_qr(shot)
+            if not code:
+                st.warning("QR을 읽지 못했어요. 더 가까이, 밝은 곳에서 다시 찍거나 번호를 직접 입력해 주세요.")
+    typed = st.text_input("번호 직접 입력 (QR이 안 읽힐 때)", placeholder="KYU-261117-AB12", key=f"chk_txt_{n}")
+    code = code or typed.strip().upper()
+    if not code:
+        return
+    table = "orders" if code.startswith("DR-") else "reservations"
+    try:
+        rows = db_select(table, code=code)
+    except Exception as e:
+        st.error(f"조회에 실패했어요. {explain(e)}")
+        return
+    if not rows:
+        st.error(f"{code} 번호를 찾을 수 없어요.")
+        return
+    r = rows[0]
+    if table == "reservations":
+        st.markdown(f"**{r['name']}** · {r['campus']} {r['kind']} · {r['route']}  \n"
+                    f"{r['ride_date']} {r['depart_time']} · 좌석 **{r['seat']}** · {r['board_stop']} → {r['alight_stop']}")
+        ok_status, done_status, label = "예약", "탑승완료", "탑승 확인"
+    else:
+        st.markdown(f"**{r['name']}** · {r['items']}  \n합계 {won(int(r['total'] or 0))} · {r['pickup_how']} {r['pickup_when']}")
+        ok_status, done_status, label = "접수", "수령완료", "수령 확인"
+    if r["status"] == "취소":
+        st.error("취소된 번호예요. 탑승·수령할 수 없어요.")
+    elif r["status"] == done_status:
+        st.warning("이미 사용된 번호예요. 같은 QR을 두 번 쓸 수 없어요.")
+    elif r["status"] == ok_status:
+        if table == "reservations" and r["ride_date"] != f"{now_kst():%Y-%m-%d}":
+            st.warning(f"오늘 탑승일이 아니에요. (탑승일 {r['ride_date']})")
+        st.button(label, key="chk_ok", type="primary", on_click=chk_done, args=(table, code, done_status))
 
 
 def admin_panel():
@@ -1201,16 +1313,20 @@ def admin_panel():
                 except Exception as e:
                     st.error(explain(e))
                     st.code(str(e))
+        st.markdown("#### 탑승·수령 확인")
+        check_panel()
+        st.divider()
         try:
             res, orders = db_select("reservations"), db_select("orders")
         except Exception as e:
             st.error(f"데이터를 불러오지 못했어요. ({e})")
             return
         active = [r for r in res if r["status"] == "예약"]
-        m = st.columns(3)
+        m = st.columns(4)
         m[0].metric("유효 예약", len(active))
-        m[1].metric("오늘 탑승", sum(r["ride_date"] == f"{now_kst():%Y-%m-%d}" for r in active))
+        m[1].metric("오늘 탑승", sum(r["ride_date"] == f"{now_kst():%Y-%m-%d}" and r["status"] in ("예약", "탑승완료") for r in res))
         m[2].metric("접수 주문", sum(o["status"] == "접수" for o in orders))
+        m[3].metric("탑승·수령 완료", sum(r["status"] == "탑승완료" for r in res) + sum(o["status"] == "수령완료" for o in orders))
         a, b = st.tabs(["버스 예약", "음료 주문"])
         with a:
             camp = st.selectbox("캠퍼스", ["전체"] + CAMPUS_LIST, key="adm_campus")
