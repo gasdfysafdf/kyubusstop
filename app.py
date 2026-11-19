@@ -958,8 +958,23 @@ def go(page: str):
     st.session_state["page"] = page
 
 
+def has_opts(m: dict) -> bool:
+    """고를 옵션이 있는 메뉴인가? (HOT 가능 · 디카페인 변경 가능)"""
+    return (not m.get("food") and not m.get("ice_only")) or bool(m.get("decaf"))
+
+
+def opt_label(m: dict) -> str:
+    a = []
+    if not m.get("food") and not m.get("ice_only"):
+        a.append("HOT")
+    if m.get("decaf"):
+        a.append("디카페인")
+    return "·".join(a) + " 고르기"
+
+
 def pick(name: str):
     st.session_state["sel"] = name
+    st.toast("아래 ‘옵션’ 창에서 골라 담아 주세요 ↓", icon="👇")
 
 
 def add_to_cart(name: str, temp: str, shot: bool, qty: int):
@@ -1393,8 +1408,9 @@ def menu_card(i: int, m: dict, selected: bool):
         md(f'<div class="mc{photo}">{visual(m, f"m{i}")}{tag}</div>'
            f'<div class="mc-n">{m["name"]}</div><div class="mc-d">{m["desc"]}</div>'
            f'<div class="mc-p{pcls}">{price_txt(m)}{ice}</div>')
-        st.button("옵션 선택됨" if selected else "옵션 선택", key=f"pick_{i}", type="primary" if selected else "secondary",
-                  on_click=pick, args=(m["name"],))
+        if has_opts(m):
+            st.button(f"{opt_label(m)} ✓" if selected else opt_label(m), key=f"pick_{i}", type="primary" if selected else "secondary",
+                      on_click=pick, args=(m["name"],))
         st.button("＋ 바로 담기", key=f"quick_{i}", on_click=quick_add, args=(m["name"],))
 
 
@@ -1418,29 +1434,30 @@ def page_drink():
                 cols = st.columns(3)
                 for col, m in zip(cols, items[r:r + 3]):
                     with col:
-                        menu_card(ORDER.index(m["name"]), m, m["name"] == st.session_state["sel"])
+                        menu_card(ORDER.index(m["name"]), m, m["name"] == st.session_state["sel"] and has_opts(m))
         sel = st.session_state["sel"]
         m = ALL[sel]
-        with st.container(key="opt"):
-            md(f'<div class="opt-h">{visual(m, "big", big=True)}<div><h3>{sel}</h3><p>{m["desc"]}</p></div><div class="pr">{price_txt(m)}</div></div>')
-            c1, c2 = st.columns(2)
-            if m.get("food"):
-                temp = ""
-                c1.markdown("&nbsp;", unsafe_allow_html=True)
-            else:
-                temp_opts = ["ICE"] if m.get("ice_only") else ["ICE", "HOT"]
-                temp = c1.radio("온도", temp_opts, horizontal=True, key=f"t_{sel}")
-            qty = int(c2.number_input("수량", 1, 10, 1, key="qty"))
-            shot = False
-            if m.get("decaf"):
-                shot = st.checkbox(f"{DECAF_LABEL} (+{won(DECAF_PRICE)})", key=f"shot_{sel}")
-            if m.get("ice_only"):
-                st.caption("이 메뉴는 ICE로만 만들 수 있어요.")
-            unit = m["price"] + (DECAF_PRICE if shot else 0)
-            if m.get("price_to"):
-                st.caption("가격이 범위인 메뉴는 최저가로 먼저 계산해요. 정확한 금액은 카운터에서 확인해 드려요.")
-            st.button(f"장바구니 담기 · {won(unit * qty)}", key="add", type="primary",
-                      on_click=add_to_cart, args=(sel, temp, shot, qty))
+        if has_opts(m):
+            with st.container(key="opt"):
+                md(f'<div class="opt-h">{visual(m, "big", big=True)}<div><h3>{sel}</h3><p>{m["desc"]}</p></div><div class="pr">{price_txt(m)}</div></div>')
+                c1, c2 = st.columns(2)
+                if m.get("food"):
+                    temp = ""
+                    c1.markdown("&nbsp;", unsafe_allow_html=True)
+                else:
+                    temp_opts = ["ICE"] if m.get("ice_only") else ["ICE", "HOT"]
+                    temp = c1.radio("온도", temp_opts, horizontal=True, key=f"t_{sel}")
+                qty = int(c2.number_input("수량", 1, 10, 1, key="qty"))
+                shot = False
+                if m.get("decaf"):
+                    shot = st.checkbox(f"{DECAF_LABEL} (+{won(DECAF_PRICE)})", key=f"shot_{sel}")
+                if m.get("ice_only"):
+                    st.caption("이 메뉴는 ICE로만 만들 수 있어요.")
+                unit = m["price"] + (DECAF_PRICE if shot else 0)
+                if m.get("price_to"):
+                    st.caption("가격이 범위인 메뉴는 최저가로 먼저 계산해요. 정확한 금액은 카운터에서 확인해 드려요.")
+                st.button(f"장바구니 담기 · {won(unit * qty)}", key="add", type="primary",
+                          on_click=add_to_cart, args=(sel, temp, shot, qty))
         st.caption("메뉴와 가격은 매장 사정에 따라 달라질 수 있어요.")
 
     with right:
