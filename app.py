@@ -243,33 +243,71 @@ BUS_ROUTES = [
 ]
 # 아직 시간표를 받지 못한 노선: 방학 · 논산↔대전(16호차), 주중 1~9호차의 하교 시간표
 
-# ── 음료 메뉴 (가격·설명은 모두 예시예요. 실제 메뉴판에 맞게 고쳐 주세요) ──
-#   name 이름 / price 가격(원) / desc 한 줄 설명 / c 컵 색상 2개 / ice_only ICE만 가능 / shot 샷 추가 가능 / tag 배지
-SHOT_PRICE = 500
+# ── 메뉴 (메뉴판 사진 기준이에요. 가격이 바뀌면 여기만 고치면 돼요) ──
+#   name 이름 / price 가격(원) / price_to 가격이 범위일 때 높은 쪽 가격 / desc 한 줄 설명
+#   c 컵 색상 2개 / img 사진 파일(assets 폴더) / emoji 컵 대신 보여 줄 그림(디저트·샌드위치용)
+#   ice_only ICE만 가능 / decaf 디카페인 변경 가능 / food 온도 선택 없음 / tag 배지
+# ※ ICE·HOT 가능 여부와 한 줄 설명은 메뉴판에 없어서 임시로 적었어요. 실제에 맞게 고쳐 주세요.
+DECAF_PRICE = 500
+DECAF_LABEL = "디카페인 변경"
 MENU = {
-    "COFFEE": [
-        dict(name="아메리카노", price=3000, desc="진하게 내린 에스프레소에 물을 더한 깔끔한 한 잔", c=("#7A5440", "#432C20"), shot=True),
-        dict(name="라떼", price=3800, desc="에스프레소에 부드러운 우유를 듬뿍", c=("#DDBE9A", "#BC9068"), shot=True),
-        dict(name="바닐라라떼", price=4300, desc="바닐라 시럽의 은은한 단맛", c=("#EBD3AA", "#CFA874"), shot=True),
-        dict(name="카라멜라떼", price=4300, desc="달콤한 카라멜 향이 퍼지는 라떼", c=("#E0A96C", "#BC7E40"), shot=True),
-        dict(name="카페모카", price=4500, desc="초콜릿과 에스프레소의 진한 조화", c=("#A47760", "#6F4735"), shot=True),
-        dict(name="노을 라떼", price=4800, desc="우유 위로 에스프레소가 번지는 노을빛 라떼", c=("#F7B885", "#F3A6B8"), ice_only=True, shot=True, tag="시그니처"),
+    "시그니처": [
+        dict(name="KYU 양말차", price=4000, desc="귀여운 양 마시멜로가 쏙! 진하고 달콤한 시그니처 말차 라떼", c=("#B1CB86", "#80A453"),
+             img="yangmatcha.jpg", ice_only=True, tag="시그니처"),
     ],
-    "NON COFFEE": [
-        dict(name="그린티라떼", price=4300, desc="고소한 녹차와 우유의 부드러운 만남", c=("#BFD59A", "#8FB063")),
-        dict(name="초콜릿", price=4300, desc="진한 초콜릿을 우유에 녹인 달콤한 음료", c=("#85543F", "#55321F")),
-        dict(name="딸기라떼", price=4800, desc="딸기청을 우유에 섞은 상큼한 라떼", c=("#F8B6C2", "#EE8EA4"), ice_only=True),
-        dict(name="복숭아에이드", price=4500, desc="복숭아 향이 가득한 시원한 에이드", c=("#FFD6B6", "#FFB68E"), ice_only=True),
-        dict(name="레몬에이드", price=4500, desc="직접 만든 레몬청으로 상큼하게", c=("#FAE88F", "#F1D14F"), ice_only=True),
-        dict(name="석양 에이드", price=5000, desc="하늘색에서 분홍으로 물드는 블루레몬 에이드", c=("#9CCBEA", "#F3A6B8"), ice_only=True, tag="시그니처"),
+    "커피": [
+        dict(name="아메리카노", price=2500, desc="진하게 내린 에스프레소에 물을 더한 깔끔한 한 잔", c=("#7A5440", "#432C20"), decaf=True),
+        dict(name="꿀아메리카노", price=3000, desc="달콤한 꿀을 더한 아메리카노", c=("#B98A4E", "#6B4524"), decaf=True),
+        dict(name="바닐라 아메리카노", price=3000, desc="바닐라 향이 은은한 아메리카노", c=("#9C7350", "#563820"), decaf=True),
+        dict(name="헤이즐넛 아메리카노", price=3000, desc="고소한 헤이즐넛 향의 아메리카노", c=("#8D6446", "#4D311D"), decaf=True),
+        dict(name="헛개리카노", price=3300, desc="헛개 향을 더한 이색 아메리카노", c=("#9A7A4E", "#5D4426"), decaf=True),
+        dict(name="카푸치노", price=3500, desc="에스프레소 위에 부드러운 우유 거품", c=("#E3C7A2", "#B98F66"), decaf=True),
+        dict(name="하우스밀크 라떼", price=3500, desc="에스프레소에 부드러운 우유를 듬뿍", c=("#DDBE9A", "#BC9068"), decaf=True),
+        dict(name="바닐라 라떼", price=3800, desc="바닐라 시럽의 은은한 단맛", c=("#EBD3AA", "#CFA874"), decaf=True),
+        dict(name="헤이즐넛 라떼", price=3800, desc="헤이즐넛 향이 고소한 라떼", c=("#DDBB93", "#B58A5E"), decaf=True),
+        dict(name="연유 라떼", price=3800, desc="달콤한 연유를 더한 부드러운 라떼", c=("#F0DDBA", "#D4AE7C"), decaf=True),
+        dict(name="카라멜마끼아또", price=3900, desc="달콤한 카라멜 향이 퍼지는 마끼아또", c=("#E0A96C", "#BC7E40"), decaf=True),
+        dict(name="카페모카", price=3900, desc="초콜릿과 에스프레소의 진한 조화", c=("#A47760", "#6F4735"), decaf=True),
+        dict(name="초코라떼", price=4000, desc="진한 초콜릿을 우유에 녹인 달콤한 음료", c=("#85543F", "#55321F")),
+        dict(name="큐브라떼", price=4200, desc="큐브 얼음이 들어간 시원한 라떼", c=("#E6CBA6", "#BF9669"), ice_only=True, decaf=True),
+        dict(name="초코젤라또 말차라떼", price=4500, desc="초코 젤라또를 올린 말차 라떼", c=("#B1CB86", "#7A5440"), ice_only=True),
     ],
-    "TEA & ETC": [
-        dict(name="얼그레이", price=3500, desc="베르가못 향이 은은한 홍차", c=("#CF985E", "#A8692F")),
-        dict(name="복숭아티", price=3800, desc="달콤한 복숭아를 우린 과일 티", c=("#F6BE96", "#E99A68")),
-        dict(name="히비스커스", price=3800, desc="새콤한 맛과 붉은 빛깔의 허브티", c=("#DF5C78", "#B02E4C")),
-        dict(name="유자차", price=3800, desc="따뜻하게 마시기 좋은 달콤 쌉싸름한 유자", c=("#F7D775", "#E3B240")),
-        dict(name="요거트스무디", price=5000, desc="플레인 요거트를 갈아 만든 부드러운 스무디", c=("#F6E7EC", "#E8C9D4"), ice_only=True),
-        dict(name="말차스무디", price=5000, desc="진한 말차를 곱게 갈아 만든 스무디", c=("#B1CB86", "#80A453"), ice_only=True),
+    "에이드": [
+        dict(name="레몬 에이드", price=3500, desc="상큼한 레몬의 시원한 에이드", c=("#FAE88F", "#F1D14F"), ice_only=True),
+        dict(name="블루레몬 에이드", price=3500, desc="푸른 빛깔의 새콤한 레몬 에이드", c=("#9CCBEA", "#5FA8DA"), ice_only=True),
+        dict(name="자몽 에이드", price=3500, desc="쌉싸름하고 상큼한 자몽 에이드", c=("#F9B7A6", "#F08C79"), ice_only=True),
+        dict(name="청포도 에이드", price=3500, desc="달콤한 청포도의 시원한 에이드", c=("#D9EBA4", "#A8CC5F"), ice_only=True),
+        dict(name="라임라임모히또", price=3800, desc="라임 향이 가득한 청량한 모히또", c=("#C9E7A3", "#8DBF5A"), ice_only=True),
+        dict(name="체리콜라", price=3800, desc="체리 향을 더한 톡 쏘는 콜라", c=("#B5485A", "#6E1F2D"), ice_only=True),
+        dict(name="제로 부스트 에이드", price=3900, desc="당 걱정을 덜어낸 제로 에이드", c=("#BFE3EF", "#7FC4DB"), ice_only=True),
+    ],
+    "티 & 아이스티": [
+        dict(name="복숭아아이스티", price=2800, desc="달콤한 복숭아 향의 아이스티", c=("#FFD6B6", "#FFB68E"), ice_only=True),
+        dict(name="자몽차", price=3300, desc="자몽 과육이 들어간 새콤한 차", c=("#F9B7A6", "#EE8C77")),
+        dict(name="레몬차", price=3300, desc="상큼한 레몬을 우린 차", c=("#FAE88F", "#EBC945")),
+        dict(name="유자차", price=3300, desc="따뜻하게 마시기 좋은 달콤 쌉싸름한 유자", c=("#F7D775", "#E3B240")),
+        dict(name="유자생강차", price=3500, desc="유자에 생강을 더해 속이 따뜻해지는 차", c=("#F2CE6A", "#D9A233")),
+        dict(name="사과유자차", price=3500, desc="사과와 유자를 함께 우린 차", c=("#F4D98A", "#E0B04F")),
+        dict(name="상큼 리치티", price=3800, desc="리치 향이 상큼한 티", c=("#F9D3D8", "#EBA3AE")),
+        dict(name="저당 골든애플 블랙티", price=3800, desc="당을 줄인 사과 향 블랙티", c=("#E7C766", "#B98A2E")),
+        dict(name="허니자몽블랙티", price=3800, desc="꿀과 자몽을 더한 블랙티", c=("#F2B58C", "#C97A47")),
+        dict(name="제로 레몬말차 아이스티", price=3800, desc="레몬과 말차가 만난 제로 아이스티", c=("#D7E6A0", "#9FBE5E"), ice_only=True),
+    ],
+    "디저트 & 스낵": [
+        dict(name="쿠키 (수제 버터·초코칩)", price=2000, price_to=2500, desc="고르는 종류에 따라 가격이 달라요", emoji="🍪", food=True),
+        dict(name="마카롱 (뚱카롱 기준)", price=2500, price_to=2800, desc="크림이 듬뿍 든 뚱카롱", emoji="🧁", food=True),
+        dict(name="칩 (바나나칩·섭칩·칩류)", price=2000, price_to=3000, desc="고르는 종류에 따라 가격이 달라요", emoji="🥔", food=True),
+        dict(name="떡 (찰떡·크림 찹쌀떡 등)", price=2200, price_to=2800, desc="고르는 종류에 따라 가격이 달라요", emoji="🍡", food=True),
+        dict(name="시리얼컵 (우유·요거트 포함)", price=3500, price_to=4000, desc="우유나 요거트와 함께 먹는 시리얼", emoji="🥣", food=True),
+        dict(name="아사이볼", price=5500, price_to=6500, desc="과일과 그래놀라를 올린 아사이볼", emoji="🫐", food=True),
+    ],
+    "샌드위치 & 랩": [
+        dict(name="에그 마요 샌드위치", price=4300, desc="부드러운 계란 마요 샌드위치", emoji="🥪", food=True),
+        dict(name="햄치즈 샌드위치", price=4500, desc="햄과 치즈가 든 든든한 샌드위치", emoji="🥪", food=True),
+        dict(name="치킨 텐더 샌드위치", price=5200, desc="바삭한 치킨 텐더가 들어간 샌드위치", emoji="🥪", food=True),
+        dict(name="불고기 또띠아 랩", price=4800, desc="불고기를 돌돌 만 또띠아 랩", emoji="🌯", food=True),
+        dict(name="치킨 샐러드 랩", price=4800, desc="치킨과 채소를 돌돌 만 랩", emoji="🌯", food=True),
+        dict(name="랩모닝 샌드위치 세트", price=6000, desc="든든한 아침 & 브런치 세트 · 아메리카노 + 햄치즈 샌드위치 알찬 구성!", c=("#7A5440", "#432C20"), emoji="🥪", tag="세트"),
     ],
 }
 PICKUP_HOW = ["매장에서 마실게요", "테이크아웃"]
@@ -790,6 +828,9 @@ background:radial-gradient(60% 140% at 100% 120%,rgba(247,184,133,.95),transpare
 .mc .tg{font-size:12px;font-weight:400;color:#B03A5B;background:#FBE4EA;border-radius:99px;padding:4px 10px;font-family:'Jua','Gowun Dodum','Apple SD Gothic Neo','Malgun Gothic',sans-serif!important}
 .stApp .mc-n{font-weight:400;font-size:17.5px;margin-top:2px;font-family:'Jua','Gowun Dodum','Apple SD Gothic Neo','Malgun Gothic',sans-serif!important}.stApp .mc-d{color:var(--mut);font-size:13px;line-height:1.55;min-height:40px;margin:3px 0 8px}
 .mc-p{font-weight:400;color:var(--g);font-size:16.5px;font-family:'Jua','Gowun Dodum','Apple SD Gothic Neo','Malgun Gothic',sans-serif!important}.mc-i{display:inline-block;margin-left:6px;font-size:12px;color:var(--mut);font-weight:400;font-family:'Jua','Gowun Dodum','Apple SD Gothic Neo','Malgun Gothic',sans-serif!important}
+.mc.ph-on{display:block;position:relative}.mc .ph{display:block;width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:16px;border:2px solid var(--line)}.mc.ph-on .tg{position:absolute;top:8px;right:8px;box-shadow:0 2px 6px rgba(0,0,0,.15)}
+.emo{display:flex;align-items:center;justify-content:center;width:58px;height:72px;font-size:38px;flex:none}.emo.big{width:72px;height:90px;font-size:48px}
+.opt-h .ph.big{width:96px;height:96px;aspect-ratio:auto;object-fit:cover;border-radius:18px;border:2px solid var(--line);flex:none}.mc-p.rg{font-size:14.5px}
 .st-key-menu [data-testid="stHorizontalBlock"]{gap:14px}
 .st-key-menu .stButton>button{min-height:44px;font-size:14.5px;border-radius:13px}
 .st-key-opt{margin-top:26px}
@@ -856,7 +897,8 @@ background:radial-gradient(60% 140% at 100% 120%,rgba(247,184,133,.95),transpare
 .st-key-menu [data-testid="stHorizontalBlock"]{flex-wrap:wrap!important;gap:10px!important}
 .st-key-menu :is([data-testid="stColumn"],[data-testid="column"]){flex:0 0 calc(50% - 5px)!important;min-width:calc(50% - 5px)!important;width:calc(50% - 5px)!important}
 [class*="st-key-mi_"],[class*="st-key-mis_"]{padding:12px!important}.mc .cup{width:46px;height:58px}.mc-d{font-size:12.5px;min-height:58px}
-.opt-h{flex-wrap:wrap}.opt-h .cup{width:56px;height:70px}
+.opt-h{flex-wrap:wrap}.opt-h .cup{width:56px;height:70px}.mc .emo{width:46px;height:58px;font-size:32px}.opt-h .emo.big{width:56px;height:70px;font-size:38px}.opt-h .ph.big{width:72px;height:72px}
+.st-key-d_cat [role="radiogroup"]{grid-template-columns:repeat(2,1fr)!important}.st-key-d_cat label:is([data-baseweb="radio"],[data-testid="stRadioOption"]) p{white-space:normal!important}
 .mc-p{margin-bottom:8px}.st-key-d_cat label:is([data-baseweb="radio"],[data-testid="stRadioOption"]) p{font-size:13px;white-space:nowrap}.st-key-d_cat [role="radiogroup"]{gap:6px}
 }
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.stApp .hero-copy h1,.led-run,.led-lamp,.road-bus{animation:none}.road-bus{left:auto;right:12%}.stButton>button{transition:none}}
@@ -914,7 +956,7 @@ def clear_key(key: str):
 
 
 def unit_price(it) -> int:
-    return ALL[it["n"]]["price"] + (SHOT_PRICE if it["s"] else 0)
+    return ALL[it["n"]]["price"] + (DECAF_PRICE if it["s"] else 0)
 
 
 def cart_total(cart) -> int:
@@ -933,6 +975,28 @@ def cup(c1: str, c2: str, uid: str) -> str:
             '<rect x="28" y="52" width="13" height="13" rx="3.5" fill="#fff" fill-opacity=".45" transform="rotate(-14 34 58)"/>'
             '<rect x="42" y="66" width="12" height="12" rx="3.5" fill="#fff" fill-opacity=".4" transform="rotate(12 48 72)"/></g>'
             '<rect x="13" y="24" width="54" height="9" rx="4.5" fill="#0E4A38"/><rect x="19" y="18" width="42" height="8" rx="4" fill="#17694F"/></svg>')
+
+
+def visual(m: dict, uid: str, big: bool = False) -> str:
+    """메뉴 그림: 사진이 있으면 사진, 디저트·샌드위치는 이모지, 나머지는 컵 그림"""
+    if m.get("img"):
+        b64 = img(m["img"], 700)
+        if b64:
+            return f'<img class="ph{" big" if big else ""}" src="data:image/jpeg;base64,{b64}" alt="{esc(m["name"])}">'
+    if m.get("food") or (m.get("emoji") and not m.get("c")):
+        return f'<span class="emo{" big" if big else ""}" aria-hidden="true">{m.get("emoji", "🍽️")}</span>'
+    return cup(*m["c"], uid=uid)
+
+
+def price_txt(m: dict) -> str:
+    return f'{won(m["price"])} ~ {won(m["price_to"])}' if m.get("price_to") else won(m["price"])
+
+
+def opt_txt(it) -> str:
+    m = ALL[it["n"]]
+    parts = [p for p in (it["t"], DECAF_LABEL if it["s"] else "") if p]
+    parts.append(f'{it["q"]}개' if m.get("food") else f'{it["q"]}잔')
+    return " · ".join(parts)
 
 
 def nextstop(n: int, name: str) -> str:
@@ -1284,16 +1348,18 @@ def page_bus():
 def menu_card(i: int, m: dict, selected: bool):
     tag = f'<span class="tg">{m["tag"]}</span>' if m.get("tag") else ""
     ice = '<span class="mc-i">ICE 전용</span>' if m.get("ice_only") else ""
+    photo = " ph-on" if (m.get("img") and img(m["img"], 700)) else ""
+    pcls = " rg" if m.get("price_to") else ""
     with st.container(key=f"{'mis' if selected else 'mi'}_{i}"):
-        md(f'<div class="mc">{cup(*m["c"], uid=f"m{i}")}{tag}</div>'
+        md(f'<div class="mc{photo}">{visual(m, f"m{i}")}{tag}</div>'
            f'<div class="mc-n">{m["name"]}</div><div class="mc-d">{m["desc"]}</div>'
-           f'<div class="mc-p">{won(m["price"])}{ice}</div>')
+           f'<div class="mc-p{pcls}">{price_txt(m)}{ice}</div>')
         st.button("선택됨" if selected else "선택", key=f"pick_{i}", type="primary" if selected else "secondary",
                   on_click=pick, args=(m["name"],))
 
 
 def page_drink():
-    pagehead("음료 주문", "버스를 기다리는 동안 마실 음료를 미리 주문해 두세요. 도착하면 1층 카운터에서 받아요.", "CAFE · 음료 주문")
+    pagehead("음료 주문", "버스를 기다리는 동안 먹고 마실 음료와 간식을 미리 주문해 두세요. 도착하면 1층 카운터에서 받아요.", "CAFE · 음료 주문")
     cart = st.session_state.setdefault("cart", [])
     st.session_state.setdefault("sel", ORDER[0])
     left, right = st.columns([1.5, 1], gap="large")
@@ -1312,20 +1378,26 @@ def page_drink():
         sel = st.session_state["sel"]
         m = ALL[sel]
         with st.container(key="opt"):
-            md(f'<div class="opt-h">{cup(*m["c"], uid="big")}<div><h3>{sel}</h3><p>{m["desc"]}</p></div><div class="pr">{won(m["price"])}</div></div>')
+            md(f'<div class="opt-h">{visual(m, "big", big=True)}<div><h3>{sel}</h3><p>{m["desc"]}</p></div><div class="pr">{price_txt(m)}</div></div>')
             c1, c2 = st.columns(2)
-            temp_opts = ["ICE"] if m.get("ice_only") else ["ICE", "HOT"]
-            temp = c1.radio("온도", temp_opts, horizontal=True, key=f"t_{sel}")
+            if m.get("food"):
+                temp = ""
+                c1.markdown("&nbsp;", unsafe_allow_html=True)
+            else:
+                temp_opts = ["ICE"] if m.get("ice_only") else ["ICE", "HOT"]
+                temp = c1.radio("온도", temp_opts, horizontal=True, key=f"t_{sel}")
             qty = int(c2.number_input("수량", 1, 10, 1, key="qty"))
             shot = False
-            if m.get("shot"):
-                shot = st.checkbox(f"샷 추가 (+{won(SHOT_PRICE)})", key=f"shot_{sel}")
+            if m.get("decaf"):
+                shot = st.checkbox(f"{DECAF_LABEL} (+{won(DECAF_PRICE)})", key=f"shot_{sel}")
             if m.get("ice_only"):
                 st.caption("이 메뉴는 ICE로만 만들 수 있어요.")
-            unit = m["price"] + (SHOT_PRICE if shot else 0)
+            unit = m["price"] + (DECAF_PRICE if shot else 0)
+            if m.get("price_to"):
+                st.caption("가격이 범위인 메뉴는 최저가로 먼저 계산해요. 정확한 금액은 카운터에서 확인해 드려요.")
             st.button(f"장바구니 담기 · {won(unit * qty)}", key="add", type="primary",
                       on_click=add_to_cart, args=(sel, temp, shot, qty))
-        st.caption("메뉴와 가격은 예시예요. 실제 메뉴판과 다를 수 있어요.")
+        st.caption("메뉴와 가격은 매장 사정에 따라 달라질 수 있어요.")
 
     with right:
         with st.container(key="cartbox"):
@@ -1345,18 +1417,20 @@ def page_drink():
                 st.button("새로 주문하기", key="d_new", on_click=clear_key, args=("d_ticket",))
             else:
                 n_items = sum(c["q"] for c in cart)
-                md(f'<div class="ch"><span class="ico">[[cart]]</span><h3>주문 내역</h3>{f"<span class=n>{n_items}잔</span>" if n_items else ""}</div>')
+                md(f'<div class="ch"><span class="ico">[[cart]]</span><h3>주문 내역</h3>{f"<span class=n>{n_items}개</span>" if n_items else ""}</div>')
                 if not cart:
                     md('<div class="empty">아직 담은 메뉴가 없어요.<br>메뉴를 고르고 장바구니에 담아 주세요.</div>')
                 else:
                     with st.container(key="cartlines"):
                         for i, it in enumerate(cart):
                             a, b = st.columns([5, 1], vertical_alignment="center")
-                            opt = f'{it["t"]}{" · 샷 추가" if it["s"] else ""} · {it["q"]}잔'
+                            opt = opt_txt(it)
                             a.markdown(squash(f'<div class="cl"><span>{esc(it["n"])}<small>{opt}</small></span><span>{won(unit_price(it) * it["q"])}</span></div>'),
                                        unsafe_allow_html=True)
                             b.button("삭제", key=f"rm_{i}", on_click=remove_item, args=(i,))
                     md(f'<div class="tot"><span>합계</span><b>{won(cart_total(cart))}</b></div>')
+                    if any(ALL[c["n"]].get("price_to") for c in cart):
+                        st.caption("※ 가격이 범위인 메뉴는 최저가로 계산했어요. 정확한 금액은 카운터에서 확인해요.")
                 name = st.text_input("이름", placeholder="홍길동", max_chars=20, key="d_name")
                 how = st.radio("수령 방법", PICKUP_HOW, horizontal=True, key="d_how")
                 when = st.selectbox("수령 시간", PICKUP_WHEN, key="d_when")
@@ -1367,7 +1441,7 @@ def page_drink():
                     elif not name.strip():
                         st.error("이름을 입력해 주세요.")
                     else:
-                        lines = [(it["n"], f'{it["t"]}{" · 샷 추가" if it["s"] else ""} · {it["q"]}잔') for it in cart]
+                        lines = [(it["n"], opt_txt(it)) for it in cart]
                         items_txt = ", ".join(f"{n}({q})" for n, q in lines)
                         total = cart_total(cart)
                         code = new_code("orders", "D-")
