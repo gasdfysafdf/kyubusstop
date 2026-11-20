@@ -319,7 +319,8 @@ MENU = {
     ],
 }
 PICKUP_HOW = ["매장에서 마실게요", "테이크아웃"]
-PICKUP_WHEN = ["지금", "10분 후", "20분 후", "30분 후"]
+BUS_PICKUP = "버스 탈 때 수령"
+PICKUP_WHEN = ["지금", "10분 후", "20분 후", "30분 후", "1시간 후", BUS_PICKUP]
 # ═════════════════════════════════════════════════════════════════════════════════
 
 WEEKDAY_KO = "월화수목금토일"
@@ -1546,12 +1547,17 @@ def page_drink():
                 name = st.text_input("이름", placeholder="홍길동", max_chars=20, key="d_name")
                 how = st.radio("수령 방법", PICKUP_HOW, horizontal=True, key="d_how")
                 when = st.selectbox("수령 시간", PICKUP_WHEN, key="d_when")
-                bus = st.text_input("버스 예약번호 (선택)", placeholder="K-7HQ3X", key="d_bus")
+                bus_need = when == BUS_PICKUP
+                bus = st.text_input("버스 예약번호 (필수)" if bus_need else "버스 예약번호 (선택)", placeholder="K-7HQ3X", key="d_bus")
+                if bus_need:
+                    st.caption("버스 탈 시간에 맞춰 음료를 준비해 드려요. 예약번호를 꼭 입력해 주세요.")
                 if st.button("음료 주문하기", type="primary", key="d_order"):
                     if not cart:
                         st.error("먼저 메뉴를 담아 주세요.")
                     elif not name.strip():
                         st.error("이름을 입력해 주세요.")
+                    elif bus_need and not bus.strip():
+                        st.error("‘버스 탈 때 수령’은 버스 예약번호가 있어야 해요. 예약번호를 입력해 주세요.")
                     else:
                         lines = [(it["n"], opt_txt(it)) for it in cart]
                         items_txt = ", ".join(f"{n}({q})" for n, q in lines)
