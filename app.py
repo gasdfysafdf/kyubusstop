@@ -295,12 +295,19 @@ MENU = {
         dict(name="제로 레몬말차 아이스티", price=3800, desc="레몬과 말차가 만난 제로 아이스티", c=("#D7E6A0", "#9FBE5E"), ice_only=True),
     ],
     "디저트 & 스낵": [
-        dict(name="쿠키 (수제 버터·초코칩)", price=2000, price_to=2500, desc="고르는 종류에 따라 가격이 달라요", emoji="🍪", food=True),
-        dict(name="마카롱 (뚱카롱 기준)", price=2500, price_to=2800, desc="크림이 듬뿍 든 뚱카롱", emoji="🧁", food=True),
-        dict(name="칩 (바나나칩·섭칩·칩류)", price=2000, price_to=3000, desc="고르는 종류에 따라 가격이 달라요", emoji="🥔", food=True),
-        dict(name="떡 (찰떡·크림 찹쌀떡 등)", price=2200, price_to=2800, desc="고르는 종류에 따라 가격이 달라요", emoji="🍡", food=True),
-        dict(name="시리얼컵 (우유·요거트 포함)", price=3500, price_to=4000, desc="우유나 요거트와 함께 먹는 시리얼", emoji="🥣", food=True),
-        dict(name="아사이볼", price=5500, price_to=6500, desc="과일과 그래놀라를 올린 아사이볼", emoji="🫐", food=True),
+        # variants = 종류별 가격. ※ 종류별 가격은 메뉴판에 없어서 임시 예시예요 → 실제 가격에 맞게 고쳐 주세요
+        dict(name="쿠키", price=2000, desc="수제 버터 · 초코칩 중에 골라요", emoji="🍪", food=True,
+             variants=[("수제 버터", 2000), ("초코칩", 2500)]),
+        dict(name="마카롱", price=2500, desc="크림이 듬뿍 든 뚱카롱 (뚱카롱 기준)", emoji="🧁", food=True,
+             variants=[("기본 맛", 2500), ("특별 맛", 2800)]),
+        dict(name="칩", price=2000, desc="바나나칩 · 섭칩 · 칩류 중에 골라요", emoji="🥔", food=True,
+             variants=[("바나나칩", 2000), ("섭칩", 2500), ("칩류", 3000)]),
+        dict(name="떡", price=2200, desc="찰떡 · 크림 찹쌀떡 등 중에 골라요", emoji="🍡", food=True,
+             variants=[("찰떡", 2200), ("크림 찹쌀떡", 2800)]),
+        dict(name="시리얼컵", price=3500, desc="우유 · 요거트 포함 중에 골라요", emoji="🥣", food=True,
+             variants=[("우유 포함", 3500), ("요거트 포함", 4000)]),
+        dict(name="아사이볼", price=5500, desc="과일과 그래놀라를 올린 아사이볼", emoji="🫐", food=True,
+             variants=[("기본", 5500), ("토핑 추가", 6500)]),
     ],
     "샌드위치 & 랩": [
         dict(name="에그 마요 샌드위치", price=4300, desc="부드러운 계란 마요 샌드위치", emoji="🥪", food=True),
@@ -361,6 +368,13 @@ def now_kst():
     return datetime.now(KST)        # 배포 서버는 UTC라서 한국 시간으로 맞춰 써요
 
 
+for _ms in MENU.values():
+    for _m in _ms:
+        if _m.get("variants"):
+            _ps = [p for _, p in _m["variants"]]
+            _m["price"] = min(_ps)
+            if max(_ps) > min(_ps):
+                _m["price_to"] = max(_ps)
 ALL = {m["name"]: dict(m, cat=c) for c, ms in MENU.items() for m in ms}
 ORDER = list(ALL)
 
@@ -982,11 +996,13 @@ def go(page: str):
 
 def has_opts(m: dict) -> bool:
     """고를 옵션이 있는 메뉴인가? (HOT 가능 · 디카페인 변경 가능)"""
-    return (not m.get("food") and not m.get("ice_only")) or bool(m.get("decaf"))
+    return (not m.get("food") and not m.get("ice_only")) or bool(m.get("decaf")) or bool(m.get("variants"))
 
 
 def opt_label(m: dict) -> str:
     a = []
+    if m.get("variants"):
+        a.append("종류")
     if not m.get("food") and not m.get("ice_only"):
         a.append("HOT")
     if m.get("decaf"):
@@ -999,14 +1015,14 @@ def pick(name: str):
     st.toast("아래 ‘옵션’ 창에서 골라 담아 주세요 ↓", icon="👇")
 
 
-def add_to_cart(name: str, temp: str, shot: bool, qty: int):
+def add_to_cart(name: str, temp: str, shot: bool, qty: int, variant: str = ""):
     cart = st.session_state.setdefault("cart", [])
     for it in cart:
-        if (it["n"], it["t"], it["s"]) == (name, temp, shot):
+        if (it["n"], it["t"], it["s"], it.get("v", "")) == (name, temp, shot, variant):
             it["q"] = min(it["q"] + qty, 20)
             break
     else:
-        cart.append(dict(n=name, t=temp, s=shot, q=qty))
+        cart.append(dict(n=name, t=temp, s=shot, q=qty, v=variant))
     st.toast(f"{name}을(를) 담았어요", icon="✅")
 
 
@@ -1031,8 +1047,13 @@ def clear_key(key: str):
     st.session_state.pop(key, None)
 
 
+def variant_price(m: dict, v: str) -> int:
+    return dict(m.get("variants") or []).get(v, m["price"])
+
+
 def unit_price(it) -> int:
-    return ALL[it["n"]]["price"] + (DECAF_PRICE if it["s"] else 0)
+    m = ALL[it["n"]]
+    return variant_price(m, it.get("v", "")) + (DECAF_PRICE if it["s"] else 0)
 
 
 def cart_total(cart) -> int:
@@ -1070,7 +1091,7 @@ def price_txt(m: dict) -> str:
 
 def opt_txt(it) -> str:
     m = ALL[it["n"]]
-    parts = [p for p in (it["t"], DECAF_LABEL if it["s"] else "") if p]
+    parts = [p for p in (it.get("v", ""), it["t"], DECAF_LABEL if it["s"] else "") if p]
     parts.append(f'{it["q"]}개' if m.get("food") else f'{it["q"]}잔')
     return " · ".join(parts)
 
@@ -1433,7 +1454,8 @@ def menu_card(i: int, m: dict, selected: bool):
         if has_opts(m):
             st.button(f"{opt_label(m)} ✓" if selected else opt_label(m), key=f"pick_{i}", type="primary" if selected else "secondary",
                       on_click=pick, args=(m["name"],))
-        st.button("＋ 바로 담기", key=f"quick_{i}", on_click=quick_add, args=(m["name"],))
+        if not m.get("variants"):
+            st.button("＋ 바로 담기", key=f"quick_{i}", on_click=quick_add, args=(m["name"],))
 
 
 def page_drink():
@@ -1462,6 +1484,10 @@ def page_drink():
         if has_opts(m):
             with st.container(key="opt"):
                 md(f'<div class="opt-h">{visual(m, "big", big=True)}<div><h3>{sel}</h3><p>{m["desc"]}</p></div><div class="pr">{price_txt(m)}</div></div>')
+                variant, vprice = "", m["price"]
+                if m.get("variants"):
+                    vmap = {f"{n} · {won(p)}": (n, p) for n, p in m["variants"]}
+                    variant, vprice = vmap[st.radio("종류", list(vmap), horizontal=True, key=f"v_{sel}")]
                 c1, c2 = st.columns(2)
                 if m.get("food"):
                     temp = ""
@@ -1475,11 +1501,9 @@ def page_drink():
                     shot = st.checkbox(f"{DECAF_LABEL} (+{won(DECAF_PRICE)})", key=f"shot_{sel}")
                 if m.get("ice_only"):
                     st.caption("이 메뉴는 ICE로만 만들 수 있어요.")
-                unit = m["price"] + (DECAF_PRICE if shot else 0)
-                if m.get("price_to"):
-                    st.caption("가격이 범위인 메뉴는 최저가로 먼저 계산해요. 정확한 금액은 카운터에서 확인해 드려요.")
+                unit = vprice + (DECAF_PRICE if shot else 0)
                 st.button(f"장바구니 담기 · {won(unit * qty)}", key="add", type="primary",
-                          on_click=add_to_cart, args=(sel, temp, shot, qty))
+                          on_click=add_to_cart, args=(sel, temp, shot, qty, variant))
         st.caption("메뉴와 가격은 매장 사정에 따라 달라질 수 있어요.")
 
     with right:
@@ -1512,8 +1536,6 @@ def page_drink():
                                        unsafe_allow_html=True)
                             b.button("삭제", key=f"rm_{i}", on_click=remove_item, args=(i,))
                     md(f'<div class="tot"><span>합계</span><b>{won(cart_total(cart))}</b></div>')
-                    if any(ALL[c["n"]].get("price_to") for c in cart):
-                        st.caption("※ 가격이 범위인 메뉴는 최저가로 계산했어요. 정확한 금액은 카운터에서 확인해요.")
                 name = st.text_input("이름", placeholder="홍길동", max_chars=20, key="d_name")
                 how = st.radio("수령 방법", PICKUP_HOW, horizontal=True, key="d_how")
                 when = st.selectbox("수령 시간", PICKUP_WHEN, key="d_when")
@@ -1749,7 +1771,7 @@ def page_lookup():
 # 다른 화면에 갔다 와도 입력한 값이 사라지지 않게 유지
 for _k in list(st.session_state.keys()):
     if _k in ("kind", "b_day", "b_name", "b_campus", "map_campus", "d_cat", "d_name", "d_how", "d_when", "d_bus", "qty", "l_code", "l_name") \
-            or _k.startswith(("route_", "time_", "board_", "alight_", "t_", "shot_")):
+            or _k.startswith(("route_", "time_", "board_", "alight_", "t_", "shot_", "v_")):
         st.session_state[_k] = st.session_state[_k]
 
 if "page" not in st.session_state:   # 새로 들어오면 항상 홈 (QR 주소 ?p=bus 같은 건 처음 한 번만 반영)
