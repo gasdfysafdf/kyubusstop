@@ -1026,8 +1026,13 @@ def add_to_cart(name: str, temp: str, shot: bool, qty: int, variant: str = ""):
     st.toast(f"{name}을(를) 담았어요", icon="✅")
 
 
+def add_from_panel(name: str, temp, shot: bool, qty: int, variant: str = ""):
+    add_to_cart(name, temp, shot, qty, variant)
+    st.session_state.pop(f"t_{name}", None)      # 다음에 담을 때도 ICE/HOT을 다시 고르게 비워요
+
+
 def quick_add(name: str):
-    """카드에서 한 번에 담기 (음료는 ICE, 디카페인 없음으로 담고, 바꾸려면 '옵션 선택'을 쓰세요)"""
+    """카드에서 한 번에 담기 (디저트·ICE 전용 음료만 해당)"""
     m = ALL[name]
     temp = "" if m.get("food") else "ICE"
     add_to_cart(name, temp, False, 1)
@@ -1454,7 +1459,7 @@ def menu_card(i: int, m: dict, selected: bool):
         if has_opts(m):
             st.button(f"{opt_label(m)} ✓" if selected else opt_label(m), key=f"pick_{i}", type="primary" if selected else "secondary",
                       on_click=pick, args=(m["name"],))
-        if not m.get("variants"):
+        if not m.get("variants") and (m.get("food") or m.get("ice_only")):   # HOT/ICE를 골라야 하는 음료는 바로 담기 없음
             st.button("＋ 바로 담기", key=f"quick_{i}", on_click=quick_add, args=(m["name"],))
 
 
@@ -1494,7 +1499,8 @@ def page_drink():
                     c1.markdown("&nbsp;", unsafe_allow_html=True)
                 else:
                     temp_opts = ["ICE"] if m.get("ice_only") else ["ICE", "HOT"]
-                    temp = c1.radio("온도", temp_opts, horizontal=True, key=f"t_{sel}")
+                    temp = c1.radio("온도", temp_opts, horizontal=True, key=f"t_{sel}",
+                                    index=0 if len(temp_opts) == 1 else None)   # ICE/HOT 둘 다 되는 메뉴는 직접 골라야 해요
                 qty = int(c2.number_input("수량", 1, 10, 1, key="qty"))
                 shot = False
                 if m.get("decaf"):
@@ -1502,8 +1508,9 @@ def page_drink():
                 if m.get("ice_only"):
                     st.caption("이 메뉴는 ICE로만 만들 수 있어요.")
                 unit = vprice + (DECAF_PRICE if shot else 0)
-                st.button(f"장바구니 담기 · {won(unit * qty)}", key="add", type="primary",
-                          on_click=add_to_cart, args=(sel, temp, shot, qty, variant))
+                need_temp = temp is None
+                st.button("ICE 또는 HOT을 먼저 골라 주세요" if need_temp else f"장바구니 담기 · {won(unit * qty)}", key="add",
+                          type="primary", disabled=need_temp, on_click=add_from_panel, args=(sel, temp, shot, qty, variant))
         st.caption("메뉴와 가격은 매장 사정에 따라 달라질 수 있어요.")
 
     with right:
