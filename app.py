@@ -8,6 +8,7 @@ import io
 import json
 import random
 import string
+import threading
 from datetime import date, datetime, timedelta, timezone
 from html import escape as esc
 from pathlib import Path
@@ -320,6 +321,7 @@ WEEKDAY_KO = "월화수목금토일"
 def days_text(days) -> str:
     return "월~금" if days == WEEKDAYS else "·".join(WEEKDAY_KO[d] for d in sorted(days)) + "요일"
 PAGES = ["홈", "버스 예약", "음료 주문", "예약 조회"]
+QR_LINKS = True   # True: QR 주소(?p=bus 등)로 들어오면 그 화면을 열어줘요 / False: 무조건 홈
 QUERY_TO_PAGE = {"bus": "버스 예약", "drink": "음료 주문", "lookup": "예약 조회", "home": "홈"}
 PAGE_TO_QUERY = {v: k for k, v in QUERY_TO_PAGE.items()}
 
@@ -539,6 +541,9 @@ def explain(e) -> str:
     return "알 수 없는 오류가 났어요. 잠시 후 다시 시도해 주세요."
 
 
+_LOCK = threading.Lock()   # 여러 명이 동시에 저장해도 임시 저장 파일(CSV)이 꼬이지 않게 순서를 세워요
+
+
 def _lread(t):
     f = BASE / "data" / f"{t}.csv"
     if not f.exists():
@@ -564,7 +569,13 @@ def db_insert(t, row):
         r = requests.post(f"{cfg[0]}/rest/v1/{t}", headers=_hdr(cfg[1], {"Prefer": "return=minimal"}), json=row, timeout=15)
         _check(r)
     else:
-        _lwrite(t, _lread(t) + [{k: row.get(k, "") for k in FIELDS[t]}])
+        with _LOCK:
+            rows = _lread(t)
+            if t == "reservations" and any(
+                    x.get("status") == "예약" and all(str(x.get(k)) == str(row.get(k)) for k in ("campus", "kind", "route", "ride_date", "depart_time", "seat"))
+                    for x in rows):
+                raise DBError(409, "duplicate", "23505")      # 같은 좌석 중복 예약 막기
+            _lwrite(t, rows + [{k: row.get(k, "") for k in FIELDS[t]}])
 
 
 def db_select(t, **eq):
@@ -584,11 +595,12 @@ def db_update(t, code, **vals):
         r = requests.patch(f"{cfg[0]}/rest/v1/{t}", headers=_hdr(cfg[1]), params={"code": f"eq.{code}"}, json=vals, timeout=15)
         _check(r)
     else:
-        rows = _lread(t)
-        for x in rows:
-            if x["code"] == code:
-                x.update(vals)
-        _lwrite(t, rows)
+        with _LOCK:
+            rows = _lread(t)
+            for x in rows:
+                if x["code"] == code:
+                    x.update(vals)
+            _lwrite(t, rows)
 
 
 def taken_seats(campus, kind, route, day, time_):
@@ -1740,17 +1752,18 @@ for _k in list(st.session_state.keys()):
             or _k.startswith(("route_", "time_", "board_", "alight_", "t_", "shot_")):
         st.session_state[_k] = st.session_state[_k]
 
-if "page" not in st.session_state:   # 주소 끝에 ?p=bus 또는 ?p=drink 를 붙이면 바로 그 화면이 열려요 (QR코드용)
-    st.session_state["page"] = QUERY_TO_PAGE.get(st.query_params.get("p", "home"), "홈")
+if "page" not in st.session_state:   # 새로 들어오면 항상 홈 (QR 주소 ?p=bus 같은 건 처음 한 번만 반영)
+    _want = st.query_params.get("p") if QR_LINKS else None
+    st.session_state["page"] = QUERY_TO_PAGE.get(_want, "홈") if _want else "홈"
+    try:
+        st.query_params.clear()           # 주소를 깨끗하게 → 새로고침하면 다시 홈
+    except Exception:
+        pass
 
 md(CSS.replace("__EXT__", f"url(data:image/jpeg;base64,{img('exterior.jpg', 1920)})" if img("exterior.jpg", 1920)
                else "linear-gradient(135deg,#17694F,#9CCBEA 62%,#F3A6B8)").replace("__NAVICONS__", nav_icon_css()))
 topnav()
 page = st.session_state["page"]
-try:
-    st.query_params["p"] = PAGE_TO_QUERY.get(page, "home")
-except Exception:
-    pass
 
 {"홈": page_home, "버스 예약": page_bus, "음료 주문": page_drink, "예약 조회": page_lookup}[page]()
 footer()
