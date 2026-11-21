@@ -37,18 +37,13 @@ BASE = Path(__file__).parent
 ASSETS = BASE / "assets"
 
 # ═════════════ 여기만 고치면 내용이 바뀝니다 (아래 값은 모두 예시예요) ═════════════
-STOP_NAME = "뀨 스탑 (건양대학교 메디컬캠퍼스)"                         # 메디컬캠퍼스(대전) 정류장 이름
-STOP_ADDRESS = "대전 서구 관저동로 158 건양대학교 메디컬캠퍼스 내"   # ← 예시: 실제 주소로 수정 (메디컬캠퍼스)
-STOP_LAT, STOP_LON = 36.30389, 127.34352                      # 메디컬캠퍼스 뀨 스탑 자리 (구글 지도 Plus Code 8Q89883V+HC2 에서 계산)
 OPEN_HOURS = "평일 07:00 – 20:00"                              # ← 예시: 실제 운영 시간으로 수정
 
-# 캠퍼스 2곳 (글로벌=논산, 메디컬=대전). 아래 글로벌캠퍼스 주소·좌표는 예시예요 → 실제 값으로 수정
+# 뀨 스탑은 글로벌캠퍼스(논산)에만 있어요. 아래 주소·좌표는 예시예요 → 실제 값으로 수정
 CAMPUSES = {
     "글로벌캠퍼스": dict(city="논산", name="뀨 스탑 (건양대학교 글로벌캠퍼스)",
                      address="충남 논산시 대학로 121 건양대학교 글로벌캠퍼스 내",   # ← 예시
                      lat=36.18119, lon=127.10870, hours=OPEN_HOURS),               # 글로벌캠퍼스 뀨 스탑 자리 (Plus Code 8Q8954J5+FFG 에서 계산)
-    "메디컬캠퍼스": dict(city="대전", name=STOP_NAME, address=STOP_ADDRESS,
-                     lat=STOP_LAT, lon=STOP_LON, hours=OPEN_HOURS),
 }
 CAMPUS_LIST = list(CAMPUSES)
 SEAT_ROWS = 11                                                         # 좌석 줄 수 (한 줄 4석 → 44석)
@@ -650,7 +645,7 @@ def db_update(t, code, **vals):
 def taken_seats(campus, kind, route, day, time_, fresh=False):
     rt = next((x for x in BUS_ROUTES if x["title"] == route), None)
     # 두 캠퍼스 학생이 한 대를 같이 타는 노선이면 두 캠퍼스의 예약을 모두 합쳐서 좌석을 확인해요
-    scope = [c for c in CAMPUS_LIST if c in rt["serves"]] if rt and rt["shared"] else [campus]
+    scope = sorted(rt["serves"] | {campus}) if rt and rt["shared"] else [campus]
     try:
         # 캠퍼스·상태를 한 번에 묶어서 1번만 조회해요 (예전엔 최대 4번)
         rows = db_select("reservations", _fresh=fresh, campus=scope, kind=kind, route=route, ride_date=day,
@@ -1284,7 +1279,7 @@ def home_hero():
         c1.button("버스 예약하기", key="hb_bus", type="primary", on_click=go, args=("버스 예약",))
         c2.button("음료 주문하기", key="hb_drink", on_click=go, args=("음료 주문",))
     md(f"""<div class="infobar">
-    <div><span class="ic">[[pin]]</span><span><small>위치</small><b>글로벌 · 메디컬 캠퍼스 승차장 옆</b></span></div>
+    <div><span class="ic">[[pin]]</span><span><small>위치</small><b>글로벌캠퍼스 버스 승차장 옆</b></span></div>
     <div><span class="ic">[[clock]]</span><span><small>운영 시간</small><b>{esc(OPEN_HOURS)}</b></span></div>
     <div><span class="ic">[[coffee]]</span><span><small>음료</small><b>사전 주문 가능</b></span></div></div>""")
 
@@ -1292,8 +1287,8 @@ def home_hero():
 @_frag
 def home_location():
     md(f"""<div id="location" class="sec">{nextstop(1, "정류장 위치")}<h2>뀨 스탑은 여기에 있어요</h2>
-    <p class="lead">글로벌캠퍼스와 메디컬캠퍼스, 두 곳 모두 버스 승차장 바로 옆에서 노란 불빛이 켜진 초록색 2층 건물을 찾아보세요.</p></div><div class="sp"></div>""")
-    cname = st.radio("캠퍼스 위치", CAMPUS_LIST, horizontal=True, key="map_campus", label_visibility="collapsed")
+    <p class="lead">글로벌캠퍼스 버스 승차장 바로 옆에서 노란 불빛이 켜진 초록색 2층 건물을 찾아보세요.</p></div><div class="sp"></div>""")
+    cname = CAMPUS_LIST[0] if len(CAMPUS_LIST) == 1 else st.radio("캠퍼스 위치", CAMPUS_LIST, horizontal=True, key="map_campus", label_visibility="collapsed")
     c = CAMPUSES[cname]
     lat, lon = c["lat"], c["lon"]
     left, right = st.columns([1.5, 1], gap="large")
@@ -1343,7 +1338,7 @@ def home_routes():
     groups = [("주중", "w", "평일에 운행하는 노선"), ("주말", "e", "금요일·일요일에 운행하는 노선"),
               ("셔틀", "s", "캠퍼스 사이를 오가는 셔틀")]
     out = [f'<div id="routes" class="sec">{nextstop(4, "운행 노선")}<h2>어디서든 학교까지</h2>'
-           '<p class="lead">2026학년도 통학버스 노선이에요. 버스 예약 화면에서 캠퍼스를 고르면 그곳에서 이용할 수 있는 버스가 나와요.</p>']
+           '<p class="lead">2026학년도 통학버스 노선이에요. 버스 예약 화면에서 글로벌캠퍼스에서 이용할 수 있는 버스를 고를 수 있어요.</p>']
     for k, c, desc in groups:
         rts = [rt for rt in BUS_ROUTES if rt["cls"] == k]
         if not rts:
@@ -1381,14 +1376,18 @@ def page_home():
 # ───────────────────────── 버스 예약 ─────────────────────────
 @_frag
 def page_bus():
-    pagehead("버스 예약", "캠퍼스를 고르고, 원하는 좌석까지 미리 잡아 두세요. 이름만 입력하면 돼요.", "BUS · 좌석 예약")
+    pagehead("버스 예약", "노선과 시간을 고르고, 원하는 좌석까지 미리 잡아 두세요. 이름만 입력하면 돼요.", "BUS · 좌석 예약")
     ss = st.session_state
     left, right = st.columns([1.2, 1], gap="large")
     with left:
         with st.container(key="resv"):
             md("""<div class="form-h"><span class="ico">[[ticket]]</span><div><h3>예약 정보 입력</h3><p>캠퍼스와 노선을 고르고 좌석을 선택해 주세요.</p></div></div>""")
-            md('<div class="fs"><em>1</em>캠퍼스 · 운행 선택</div>')
-            campus = st.radio("내 캠퍼스", CAMPUS_LIST, horizontal=True, key="b_campus", label_visibility="collapsed")
+            if len(CAMPUS_LIST) == 1:
+                md('<div class="fs"><em>1</em>운행 선택</div>')
+                campus = CAMPUS_LIST[0]
+            else:
+                md('<div class="fs"><em>1</em>캠퍼스 · 운행 선택</div>')
+                campus = st.radio("내 캠퍼스", CAMPUS_LIST, horizontal=True, key="b_campus", label_visibility="collapsed")
             routes = routes_for(campus)
             kind = st.radio("운행 구분", list(routes), horizontal=True, key="kind", label_visibility="collapsed")
             st.caption({"등교": f"{campus}로 오는 버스예요.", "하교": f"{campus}에서 출발하는 버스예요.",
@@ -1778,7 +1777,7 @@ def admin_panel():
         m[3].metric("탑승·수령 완료", sum(r["status"] == "탑승완료" for r in res) + sum(o["status"] == "수령완료" for o in orders))
         a, b = st.tabs(["버스 예약", "음료 주문"])
         with a:
-            camp = st.selectbox("캠퍼스", ["전체"] + CAMPUS_LIST, key="adm_campus")
+            camp = st.selectbox("캠퍼스", ["전체"] + sorted(set(CAMPUS_LIST) | {r["campus"] for r in res if r.get("campus")}), key="adm_campus")
             df = pd.DataFrame([r for r in res if camp == "전체" or r["campus"] == camp])
             show_df(df)
             if not df.empty:
